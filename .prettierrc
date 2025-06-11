@@ -1,0 +1,14 @@
+{
+  "semi": false,
+  "printWidth": 140,
+  "tabWidth": 2,
+  "useTabs": false,
+  "proseWrap": "preserve",
+  "singleQuote": true,
+  "quoteProps": "consistent",
+  "trailingComma": "all",
+  "singleAttributePerLine": false,
+
+  "importOrder": [".vue$", ".tsx$", "."],
+  "importOrderSeparation": true
+}

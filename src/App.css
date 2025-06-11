@@ -1,0 +1,249 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.logo {
+  height: 6em;
+  padding: 1.5em;
+  will-change: filter;
+  transition: filter 300ms;
+}
+.logo:hover {
+  filter: drop-shadow(0 0 2em #646cffaa);
+}
+.logo.react:hover {
+  filter: drop-shadow(0 0 2em #61dafbaa);
+}
+
+@keyframes logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  a:nth-of-type(2) .logo {
+    animation: logo-spin infinite 20s linear;
+  }
+}
+
+.card {
+  padding: 2em;
+}
+
+.read-the-docs {
+  color: #888;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  background-color: #f0f2f5;
+  color: #1c1e21;
+  margin: 0;
+  padding: 20px;
+}
+
+#root {
+  display: contents;
+}
+
+.container {
+  max-width: 800px;
+  margin: 0 auto;
+  background-color: #ffffff;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+h1 {
+  font-size: 1.5rem;
+  border-bottom: 1px solid #ddd;
+  padding-bottom: 10px;
+}
+
+h2 {
+  font-size: 1.3rem;
+}
+
+h1,
+h2,
+h3,
+hr {
+  margin: 0.5em 0;
+}
+
+hr {
+  margin: 2em 0;
+}
+
+p,
+li {
+  line-height: 1.6;
+}
+
+blockquote {
+  margin: 1em 0;
+  padding: 0.5em 1em;
+  border-left: 4px solid #e0e0e0;
+  background-color: #f9f9f9;
+  color: #555;
+}
+
+code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  background-color: #eff1f3;
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-size: 85%;
+}
+
+pre {
+  background-color: #2d2d2d;
+  color: #f8f8f2;
+  padding: 1em;
+  border-radius: 5px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+pre code {
+  background-color: transparent;
+  padding: 0;
+  font-size: 1em;
+}
+
+.editor {
+  position: relative; /* 커스텀 커서의 기준점이 됨 */
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 48px;
+  margin-top: 20px;
+  outline: none; /* 포커스 시 기본 아웃라인 제거 */
+  line-height: 1.6;
+  font-size: 16px;
+  cursor: text;
+}
+
+/* 포커스 됐을 때 테두리 강조 */
+.editor:focus-within {
+  border-color: #007acc;
+  box-shadow: 0 0 0 2px rgba(0, 122, 204, 0.2);
+}
+
+.custom-cursor {
+  position: absolute;
+  display: none; /* 초기에는 숨김 */
+  width: 2px;
+  background-color: #007acc;
+  pointer-events: none; /* 커서가 마우스 이벤트를 가로채지 않도록 함 */
+  z-index: 10;
+  /* 깜빡이지 않을 때는 항상 보이도록 opacity를 1로 설정 */
+  opacity: 1;
+  margin-left: -3px;
+}
+
+/* blinking 클래스가 있을 때만 애니메이션 적용 */
+.custom-cursor.blinking {
+  animation: blink 1s infinite;
+}
+
+.selection-rect {
+  position: absolute;
+  background-color: rgba(0, 100, 255, 0.3);
+  pointer-events: none; /* 드래그 중 이 요소가 마우스 이벤트를 가로채지 않도록 함 */
+}
+
+/* 에디터 내부의 네이티브 선택 UI를 보이지 않게 처리 */
+.editor::selection {
+  background-color: transparent;
+}
+
+@keyframes blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* --- Debug Panel --- */
+.debug-panel {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 300px;
+  padding: 12px;
+  background-color: rgba(247, 247, 247, 0.95);
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+  font-size: 10px;
+  z-index: 1000;
+  backdrop-filter: blur(5px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* --- Table Styles --- */
+table {
+  width: 100%;
+  border-collapse: collapse; /* 테두리를 한 줄로 만듭니다. */
+  margin-top: 20px;
+  font-size: 0.9em;
+}
+
+th,
+td {
+  border: 1px solid #ddd;
+  padding: 12px;
+  text-align: left;
+}
+
+thead th {
+  background-color: #f2f2f2;
+  font-weight: bold;
+  color: #333;
+}
+
+tbody tr:nth-child(even) {
+  background-color: #f9f9f9; /* 짝수 행에 연한 회색 배경 */
+}
+
+tbody tr:hover {
+  background-color: #f1f1f1; /* 마우스 오버 시 배경색 변경 */
+}
+
+/* --- Mention Styles --- */
+.mention {
+  border-radius: 2px;
+  padding: 0 4px;
+  font-weight: 500;
+  display: inline-block;
+  font-size: 0.8em;
+}
+
+.mention.blue {
+  background-color: #e3f2fd;
+  border: 1px solid #2196f3;
+  color: #1976d2;
+}
+
+.mention.purple {
+  background-color: #f3e5f5;
+  border: 1px solid #9c27b0;
+  color: #7b1fa2;
+}
+
+.mention.green {
+  background-color: #e8f5e8;
+  border: 1px solid #4caf50;
+  color: #388e3c;
+}
