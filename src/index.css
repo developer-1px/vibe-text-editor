@@ -26,6 +26,7 @@ body {
   margin: 0;
   display: flex;
   place-items: center;
+  place-content: center;
   min-width: 320px;
   min-height: 100vh;
 }
@@ -65,4 +66,20 @@ button:focus-visible {
   button {
     background-color: #f9f9f9;
   }
+}
+
+.rich-text-editor {
+  border: 1px solid #ccc;
+  margin-top: 20px;
+  cursor: crosshair;
+}
+
+.rich-text-editor .cursor {
+  position: absolute;
+  width: 2px;
+  height: 20px;
+  background-color: #4f80ff;
+  pointer-events: none;
+  top: 0;
+  left: 0;
 }

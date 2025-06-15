@@ -37,27 +37,15 @@ import DebugPanel from './components/DebugPanel'
 
 // 모듈화된 함수들 import
 import { STANDARD_LINE_HEIGHT } from './lib/constants'
-import { 
-  isAtomicComponent, 
-  findParentAtomicComponent, 
-  findNearestBlock 
-} from './lib/nodes'
-import { 
-  arePositionsEqual, 
-  findPositionFromPoint 
-} from './lib/position'
+import { isAtomicComponent, findParentAtomicComponent, findNearestBlock } from './lib/nodes'
+import { arePositionsEqual, findPositionFromPoint } from './lib/position'
 import { getLastLogicalNode } from './lib/navigation'
-import { 
-  selectWord, 
-  selectBlock, 
-  calculateSelectionRects 
-} from './lib/selection'
+import { selectWord, selectBlock, calculateSelectionRects } from './lib/selection'
 
 // 훅 import
 import { useCursor } from './hooks/useCursor'
 import { useSelection } from './hooks/useSelection'
 import { useKeyboardHandlers } from './hooks/useKeyboardHandlers'
-
 
 function App() {
   const editorRef = useRef<HTMLDivElement>(null)
@@ -157,7 +145,7 @@ function App() {
 
       if (!initialPos) return
 
-      // 이전 작업으로 인한 드래그 상태 중지  
+      // 이전 작업으로 인한 드래그 상태 중지
       stopDragging()
 
       const clickCount = e.detail
@@ -388,17 +376,19 @@ function App() {
 
         <p>adlkfajsdk fljdsa klfsjkljdas</p>
         <p>adlkfajsdk fljdsa klfsjkljdas</p>
-        {/* <div style={{ display: 'flex', gap: '20px', marginTop: '20px' }}>
-          <div style={{ flex: 1, border: '1px solid #ccc', padding: '10px' }}>
-            <h4>Column One</h4>
-            <p>This is the first column of a two-column layout. You should be able to navigate within this text block seamlessly.</p>
-          </div>
-          <div style={{ flex: 1, border: '1px solid #ccc', padding: '10px' }}>
-            <h4>Column Two</h4>
-            <p>And this is the second column. Try moving the cursor between the columns using the up and down arrow keys.</p>
-          </div>
-        </div> */}
       </div>
+
+      <div style={{ display: 'flex', gap: '20px', marginTop: '20px' }}>
+        <div style={{ flex: 1, border: '1px solid #ccc', padding: '10px' }}>
+          <h4>Column One</h4>
+          <p>This is the first column of a two-column layout. You should be able to navigate within this text block seamlessly.</p>
+        </div>
+        <div style={{ flex: 1, border: '1px solid #ccc', padding: '10px' }}>
+          <h4>Column Two</h4>
+          <p>And this is the second column. Try moving the cursor between the columns using the up and down arrow keys.</p>
+        </div>
+      </div>
+
       <DebugPanel
         anchor={anchorPosition}
         focus={focusPosition}
