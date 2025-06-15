@@ -50,3 +50,10 @@ The editor uses a custom cursor implementation that:
 - `src/lib/types.ts` - Core type definitions
 - `src/components/DebugPanel.tsx` - Debug interface for cursor state
 - `src/main.tsx` - Application entry point
+
+## Development Conventions
+
+- **Use functions over classes** - Prefer functional programming approach
+- **Limit file size** - Split files when they exceed ~300 lines
+- **Keep API changes minimal** - Avoid making too many modifications at once
+- **Programmatic API style** - Write APIs in a programmatic manner
