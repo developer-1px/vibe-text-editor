@@ -68,6 +68,8 @@ function App() {
     stopDragging,
     updateSelectionRects,
     setGoalX,
+    moveSelectionBy,
+    extendSelectionBy,
   } = useSelection()
 
   // 키보드 핸들러 훅
@@ -79,6 +81,8 @@ function App() {
     resetBlink,
     updateSelection,
     setGoalX,
+    moveSelectionBy,
+    extendSelectionBy,
   })
 
   // 좌표로부터 텍스트 위치를 찾는 함수 (에디터 요소 전달)
@@ -185,7 +189,7 @@ function App() {
           break
       }
     },
-    [resetBlink, findPositionFromPointInEditor],
+    [resetBlink, findPositionFromPointInEditor, anchorPosition, startDragging, stopDragging, updateCursorPosition, updateSelection],
   )
 
   // === 드래그 중 마우스 이동 처리 ===

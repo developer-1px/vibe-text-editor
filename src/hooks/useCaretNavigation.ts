@@ -1,6 +1,6 @@
 import { useRef } from 'react'
 import {
-  type CaretPosition,
+  type CaretPositionInterface,
   getNextCaretPosition,
   getPreviousCaretPosition,
   getNextLineCaretPosition,
@@ -18,21 +18,21 @@ type Direction = 'forward' | 'backward'
 type Unit = 'character' | 'line' | 'lineboundary' | 'documentboundary'
 
 export function useCaretNavigation(rootElRef: React.RefObject<HTMLElement>) {
-  const caretPositionRef = useRef<CaretPosition | null>(null)
+  const caretPositionRef = useRef<CaretPositionInterface | null>(null)
   const goalXRef = useRef<number | null>(null)
   const lastDirectionRef = useRef(0)
 
-  function collapse(position: CaretPosition) {
+  function collapse(position: CaretPositionInterface) {
     goalXRef.current = null
     updateCaretPosition(position)
   }
 
-  function modify(alter: Alter, direction: Direction, unit: Unit) {
+  function modify(_alter: Alter, direction: Direction, unit: Unit) {
     const root = rootElRef.current
     const currentPos = caretPositionRef.current
     if (!root || !currentPos) return
 
-    let newPosition: CaretPosition | null = null
+    let newPosition: CaretPositionInterface | null = null
 
     if (unit === 'character') {
       goalXRef.current = null
@@ -65,12 +65,11 @@ export function useCaretNavigation(rootElRef: React.RefObject<HTMLElement>) {
   }
 
   // effect!!
-  function updateCaretPosition(newPosition: CaretPosition | null) {
+  function updateCaretPosition(newPosition: CaretPositionInterface | null) {
     if (!newPosition) return
 
     caretPositionRef.current = newPosition
     const rects = getRectsForPosition(newPosition)
-    const rect = rects[1] || rects[0]
 
     visualizeRects(rects)
     console.log('Current Position:', newPosition)
