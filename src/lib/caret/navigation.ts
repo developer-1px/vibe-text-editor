@@ -121,3 +121,33 @@ export function getPreviousCaretPosition(root: Node, currentPosition: CaretPosit
 
   return null // 더 이상 이전 위치가 없음
 }
+
+/**
+ * Get the last logical text node within a container
+ */
+export function getLastLogicalNode(container: Node): Text | null {
+  const walker = document.createTreeWalker(
+    container,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode: (node) => {
+        // Only accept text nodes with actual content
+        return node.textContent && node.textContent.trim()
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_SKIP
+      }
+    }
+  )
+
+  let lastNode: Text | null = null
+  let currentNode = walker.firstChild()
+  
+  while (currentNode) {
+    if (currentNode.nodeType === Node.TEXT_NODE) {
+      lastNode = currentNode as Text
+    }
+    currentNode = walker.nextNode()
+  }
+
+  return lastNode
+}

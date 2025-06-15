@@ -2,7 +2,12 @@ import { useState, useCallback, useMemo } from 'react'
 import { CaretPosition } from '../lib/caret/CaretPosition'
 import { Selection } from '../lib/selection/Selection'
 import type { CursorPosition } from '../types'
-import type { SelectionRect } from '../lib/selection'
+interface SelectionRect {
+  top: number
+  left: number
+  width: number
+  height: number
+}
 
 /**
  * Enhanced hook for managing text selection state using CaretPosition and Selection classes

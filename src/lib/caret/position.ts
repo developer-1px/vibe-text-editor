@@ -7,6 +7,30 @@ import type { CaretPosition } from './types'
  * @param position - CaretPosition
  * @returns DOMRect 배열
  */
+/**
+ * Find cursor position from a point in the document
+ */
+export function findPositionFromPoint(clientX: number, clientY: number, container: HTMLElement): CaretPosition | null {
+  if (!document.caretPositionFromPoint) {
+    return null
+  }
+
+  const caretPosition = document.caretPositionFromPoint(clientX, clientY)
+  if (!caretPosition) {
+    return null
+  }
+
+  // Check if the position is within the container
+  if (!container.contains(caretPosition.offsetNode)) {
+    return null
+  }
+
+  return {
+    node: caretPosition.offsetNode,
+    offset: caretPosition.offset,
+  }
+}
+
 export function getRectsForPosition(position: CaretPosition): DOMRect[] {
   const { node, offset } = position
   const range = document.createRange()

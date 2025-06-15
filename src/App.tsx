@@ -1,100 +1,178 @@
-/*
-  EDITOR CORE IMPLEMENTATION SPECIFICATIONS
-
-  I. Cursor Movement (Completed)
-    - Mouse Click:
-      - [x] Moves cursor to the precise text location under the mouse pointer.
-      - [x] (Fallback) If an empty area within a block is clicked, moves the cursor to the end of that block.
-    - Arrow Keys (Left/Right):
-      - [x] Moves the cursor one character at a time.
-      - [x] Correctly traverses across different inline elements (e.g., from normal text into <b> tag).
-    - Arrow Keys (Up/Down):
-      - [x] Maintains the "Goal-X" coordinate when moving between lines of different lengths.
-      - [x] (Fallback) Intelligently jumps over empty areas or large paddings to find the next available line, preventing the cursor from getting "stuck".
-
-  II. Advanced Cursor Movement & Selection (In Progress)
-    - [x] Home / End Keys: Move cursor to the start/end of the current visual line.
-    - [x] Cmd/Ctrl + Arrow Keys:
-      - [x] Left/Right: Move to start/end of the visual line (same as Home/End).
-      - [x] Up/Down: Move to the very start/end of the editor content.
-    - [x] Text Selection:
-      - [x] Shift + Arrow Keys/Home/End/Cmd: Extend selection.
-      - [x] Shift + Mouse Click: Extend selection from the current cursor position to the clicked point.
-    - [x] Selection UI:
-      - [x] Render a visual highlight for the selected text range.
-      - [x] The highlight must correctly wrap across multiple lines.
-
-  III. Text Editing (Future)
-    - [ ] Character Input: Typing characters, numbers, symbols.
-    - [ ] Deletion: Backspace and Delete keys.
-    - [ ] Undo/Redo History.
-*/
-
 import React, { useRef, useEffect, useCallback } from 'react'
-import './App.css'
-import type { CursorPosition } from './types'
-import DebugPanel from './components/DebugPanel'
-
-// 모듈화된 함수들 import
-import { STANDARD_LINE_HEIGHT } from './lib/constants'
-import { isAtomicComponent, findParentAtomicComponent, findNearestBlock } from './lib/nodes'
-import { arePositionsEqual, findPositionFromPoint } from './lib/position'
-import { getLastLogicalNode } from './lib/navigation'
-import { selectWord, selectBlock, calculateSelectionRects } from './lib/selection'
-
-// 훅 import
-import { useCursor } from './hooks/useCursor'
 import { useSelection } from './hooks/useSelection'
-import { useKeyboardHandlers } from './hooks/useKeyboardHandlers'
+import { useCursor } from './hooks/useCursor'
+import { createHotkeyHandler } from './lib/hotkeys'
+import { findPositionFromPoint } from './lib/caret/position'
+import { isAtomicComponent, findParentAtomicComponent, findNearestBlock } from './lib/nodes'
+import { getLastLogicalNode } from './lib/caret/navigation'
+import { CaretPosition } from './lib/caret/CaretPosition'
+import type { CursorPosition } from './types'
+
+import './App.css'
 
 function App() {
   const editorRef = useRef<HTMLDivElement>(null)
   const cursorRef = useRef<HTMLDivElement>(null)
 
-  // 커서 관련 훅
-  const { isBlinking, resetBlink } = useCursor()
-
-  // 선택 영역 관리 훅
+  // Use enhanced selection hook
   const {
     anchorPosition,
     focusPosition,
     selectionRects,
-    goalX,
     isDragging,
-    updateCursorPosition,
+    selection,
+    // updateCursorPosition, // Not used in this test
     updateSelection,
     startDragging,
     updateDragFocus,
     stopDragging,
     updateSelectionRects,
-    setGoalX,
     moveSelectionBy,
     extendSelectionBy,
+    getSelectionDirection,
+    getSelectionText,
+    calculateSelectionRects,
+    collapseSelection,
   } = useSelection()
 
-  // 키보드 핸들러 훅
-  const { hotkeyHandler, getRectForPosition } = useKeyboardHandlers({
-    focusPosition,
-    anchorPosition,
-    goalX,
-    editorRef,
-    resetBlink,
-    updateSelection,
-    setGoalX,
-    moveSelectionBy,
-    extendSelectionBy,
-  })
+  // Cursor blinking
+  const { isBlinking, resetBlink } = useCursor()
 
-  // 좌표로부터 텍스트 위치를 찾는 함수 (에디터 요소 전달)
+  // Find position from point within editor
   const findPositionFromPointInEditor = useCallback((clientX: number, clientY: number): CursorPosition | null => {
     if (!editorRef.current) return null
     return findPositionFromPoint(clientX, clientY, editorRef.current)
   }, [])
 
-  // === 마우스 다운으로 드래그 시작 ===
+  // Navigation functions
+  const navigateCharacter = useCallback(
+    (direction: 'forward' | 'backward', extend: boolean = false) => {
+      if (!editorRef.current) return
+
+      resetBlink()
+      if (extend && extendSelectionBy) {
+        extendSelectionBy(editorRef.current, direction, 'character', editorRef.current)
+      } else if (!extend && moveSelectionBy) {
+        moveSelectionBy(editorRef.current, direction, 'character', editorRef.current)
+      }
+    },
+    [extendSelectionBy, moveSelectionBy, resetBlink],
+  )
+
+  const navigateLine = useCallback(
+    (direction: 'forward' | 'backward', extend: boolean = false) => {
+      if (!editorRef.current) return
+
+      resetBlink()
+      if (extend && extendSelectionBy) {
+        extendSelectionBy(editorRef.current, direction, 'line', editorRef.current)
+      } else if (!extend && moveSelectionBy) {
+        moveSelectionBy(editorRef.current, direction, 'line', editorRef.current)
+      }
+    },
+    [extendSelectionBy, moveSelectionBy, resetBlink],
+  )
+
+  const navigateLineBoundary = useCallback(
+    (direction: 'forward' | 'backward', extend: boolean = false) => {
+      if (!editorRef.current) return
+
+      resetBlink()
+      if (extend && extendSelectionBy) {
+        extendSelectionBy(editorRef.current, direction, 'lineboundary', editorRef.current)
+      } else if (!extend && moveSelectionBy) {
+        moveSelectionBy(editorRef.current, direction, 'lineboundary', editorRef.current)
+      }
+    },
+    [extendSelectionBy, moveSelectionBy, resetBlink],
+  )
+
+  const navigateDocumentBoundary = useCallback(
+    (direction: 'forward' | 'backward', extend: boolean = false) => {
+      if (!editorRef.current) return
+
+      resetBlink()
+      if (extend && extendSelectionBy) {
+        extendSelectionBy(editorRef.current, direction, 'documentboundary', editorRef.current)
+      } else if (!extend && moveSelectionBy) {
+        moveSelectionBy(editorRef.current, direction, 'documentboundary', editorRef.current)
+      }
+    },
+    [extendSelectionBy, moveSelectionBy, resetBlink],
+  )
+
+  // Keyboard handler
+  const hotkeyHandler = useCallback(
+    createHotkeyHandler([
+      // Character movement
+      { hotkey: 'ArrowLeft', handler: () => navigateCharacter('backward') },
+      { hotkey: 'ArrowRight', handler: () => navigateCharacter('forward') },
+      { hotkey: 'Shift+ArrowLeft', handler: () => navigateCharacter('backward', true) },
+      { hotkey: 'Shift+ArrowRight', handler: () => navigateCharacter('forward', true) },
+
+      // Line movement
+      { hotkey: 'ArrowUp', handler: () => navigateLine('backward') },
+      { hotkey: 'ArrowDown', handler: () => navigateLine('forward') },
+      { hotkey: 'Shift+ArrowUp', handler: () => navigateLine('backward', true) },
+      { hotkey: 'Shift+ArrowDown', handler: () => navigateLine('forward', true) },
+
+      // Line boundary movement
+      { hotkey: 'Home', handler: () => navigateLineBoundary('backward') },
+      { hotkey: 'End', handler: () => navigateLineBoundary('forward') },
+      { hotkey: 'Shift+Home', handler: () => navigateLineBoundary('backward', true) },
+      { hotkey: 'Shift+End', handler: () => navigateLineBoundary('forward', true) },
+
+      // Cmd/Ctrl + Arrow combinations
+      { hotkey: 'mod+ArrowLeft', handler: () => navigateLineBoundary('backward') },
+      { hotkey: 'mod+ArrowRight', handler: () => navigateLineBoundary('forward') },
+      { hotkey: 'mod+Shift+ArrowLeft', handler: () => navigateLineBoundary('backward', true) },
+      { hotkey: 'mod+Shift+ArrowRight', handler: () => navigateLineBoundary('forward', true) },
+      { hotkey: 'mod+ArrowUp', handler: () => navigateDocumentBoundary('backward') },
+      { hotkey: 'mod+ArrowDown', handler: () => navigateDocumentBoundary('forward') },
+      { hotkey: 'mod+Shift+ArrowUp', handler: () => navigateDocumentBoundary('backward', true) },
+      { hotkey: 'mod+Shift+ArrowDown', handler: () => navigateDocumentBoundary('forward', true) },
+
+      // Selection shortcuts
+      {
+        hotkey: 'mod+a',
+        handler: () => {
+          if (!editorRef.current) return
+          const start = CaretPosition.documentStart(editorRef.current)
+          const end = CaretPosition.documentEnd(editorRef.current)
+          if (start && end) {
+            updateSelection(start, end)
+            resetBlink()
+          }
+        },
+      },
+
+      // Collapse selection
+      {
+        hotkey: 'Escape',
+        handler: () => {
+          if (selection && !selection.isCollapsed()) {
+            collapseSelection(false) // Collapse to end
+            resetBlink()
+          }
+        },
+      },
+    ]),
+    [
+      navigateCharacter,
+      navigateLine,
+      navigateLineBoundary,
+      navigateDocumentBoundary,
+      selection,
+      updateSelection,
+      collapseSelection,
+      resetBlink,
+      editorRef,
+    ],
+  )
+
+  // Mouse down handler
   const handleMouseDown = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
-      // 모든 클릭 유형에 대한 공통 설정
       resetBlink()
 
       // --- 원자 컴포넌트 클릭 처리 ---
@@ -107,11 +185,10 @@ function App() {
           node: atomicTarget,
           offset: isFirstHalf ? 0 : 1,
         }
-        updateCursorPosition(newPos)
+        updateSelection(newPos, newPos) // Use updateSelection for consistency
         return
       }
 
-      // 클릭 좌표에서 정확한 커서 위치 찾기
       let initialPos = findPositionFromPointInEditor(e.clientX, e.clientY)
 
       // --- 빈 공간 클릭에 대한 폴백 로직 ---
@@ -149,57 +226,90 @@ function App() {
 
       if (!initialPos) return
 
-      // 이전 작업으로 인한 드래그 상태 중지
       stopDragging()
 
       const clickCount = e.detail
 
       switch (clickCount) {
         case 1: {
-          // 싱글 클릭
+          // Single click
           if (!e.shiftKey) {
             startDragging(initialPos)
           } else {
+            // Shift+click extends selection
             updateSelection(anchorPosition, initialPos)
           }
           break
         }
 
         case 2: {
-          // 더블 클릭 - 단어 선택
-          e.preventDefault() // 기본 더블클릭 동작(단어 선택) 방지
-          const wordSelection = selectWord(initialPos)
-          if (wordSelection) {
-            updateSelection(wordSelection.anchorPos, wordSelection.focusPos)
+          // Double click - select word
+          e.preventDefault()
+          const caretPos = new CaretPosition(initialPos.node, initialPos.offset)
+          if (caretPos.node.nodeType === Node.TEXT_NODE) {
+            const textNode = caretPos.node as Text
+            const text = textNode.textContent || ''
+            const offset = caretPos.offset
+
+            // Simple word boundary detection
+            let start = offset
+            let end = offset
+
+            // Find start of word
+            while (start > 0 && /\w/.test(text[start - 1])) {
+              start--
+            }
+
+            // Find end of word
+            while (end < text.length && /\w/.test(text[end])) {
+              end++
+            }
+
+            updateSelection({ node: textNode, offset: start }, { node: textNode, offset: end })
           }
           break
         }
 
         case 3: {
-          // 트리플 클릭 - 블록 선택
-          e.preventDefault() // 기본 트리플클릭 동작(문단 선택) 방지
-          const blockSelection = selectBlock(initialPos)
-          if (blockSelection) {
-            updateSelection(blockSelection.startPos, blockSelection.endPos)
+          // Triple click - select line/paragraph
+          e.preventDefault()
+
+          // Find the nearest block element
+          let currentNode = initialPos.node
+          let blockElement: Element | null = null
+
+          while (currentNode && currentNode !== editorRef.current) {
+            if (currentNode.nodeType === Node.ELEMENT_NODE) {
+              const element = currentNode as Element
+              if (element.tagName.match(/^(P|DIV|H[1-6]|BLOCKQUOTE|LI)$/)) {
+                blockElement = element
+                break
+              }
+            }
+            currentNode = currentNode.parentNode as Node
+          }
+
+          if (blockElement) {
+            // Select entire block
+            const start = CaretPosition.documentStart(blockElement)
+            const end = CaretPosition.documentEnd(blockElement)
+            if (start && end) {
+              updateSelection(start, end)
+            }
           }
           break
         }
-
-        default:
-          break
       }
     },
-    [resetBlink, findPositionFromPointInEditor, anchorPosition, startDragging, stopDragging, updateCursorPosition, updateSelection],
+    [resetBlink, findPositionFromPointInEditor, stopDragging, startDragging, anchorPosition, updateSelection],
   )
 
-  // === 드래그 중 마우스 이동 처리 ===
+  // Mouse move during drag
   useEffect(() => {
     if (!isDragging) return
 
     const handleMouseMove = (e: MouseEvent) => {
-      // 드래그 중 기본 텍스트 선택 방지
       e.preventDefault()
-      // 폴백이 없는 순수 함수를 호출. 실패하면(null) 아무것도 하지 않음.
       const newFocus = findPositionFromPointInEditor(e.clientX, e.clientY)
       if (newFocus) {
         updateDragFocus(newFocus)
@@ -210,21 +320,18 @@ function App() {
       stopDragging()
     }
 
-    // 전역 리스너 추가
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
-    // 드래그 중에는 페이지의 다른 텍스트가 선택되지 않도록 함
     document.body.style.userSelect = 'none'
 
     return () => {
-      // 클린업
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
       document.body.style.userSelect = ''
     }
   }, [isDragging, findPositionFromPointInEditor, updateDragFocus, stopDragging])
 
-  // === 커서 및 선택 범위 렌더링 ===
+  // Cursor and selection rendering
   useEffect(() => {
     if (!focusPosition || !editorRef.current) {
       if (cursorRef.current) cursorRef.current.style.display = 'none'
@@ -232,175 +339,319 @@ function App() {
       return
     }
 
-    const isCollapsed = arePositionsEqual(anchorPosition, focusPosition)
+    const isCollapsed = selection?.isCollapsed() ?? true
 
-    // 1. 선택이 없는 경우: 커서 렌더링
     if (isCollapsed) {
+      // Show cursor
       updateSelectionRects([])
-      if (cursorRef.current) {
-        const rect = getRectForPosition(focusPosition)
+      if (cursorRef.current && focusPosition) {
+        const caretPos = new CaretPosition(focusPosition.node, focusPosition.offset)
+        const rect = caretPos.getBoundingClientRect()
         if (rect) {
           const editorRect = editorRef.current.getBoundingClientRect()
-
-          // 계산과 반올림을 미리 수행
           const top = Math.round(rect.top - editorRect.top)
           const left = Math.round(rect.left - editorRect.left)
-          const originalHeight = Math.round(rect.height)
+          const height = Math.max(Math.round(rect.height), 20)
 
-          // 커서의 최소 높이를 보장하고, 세로 중앙 정렬
-          const finalHeight = Math.max(originalHeight, STANDARD_LINE_HEIGHT)
-          const finalTop = top - (finalHeight - originalHeight) / 2
-
-          cursorRef.current.style.top = `${finalTop}px`
+          cursorRef.current.style.top = `${top}px`
           cursorRef.current.style.left = `${left}px`
-          cursorRef.current.style.height = `${finalHeight}px`
+          cursorRef.current.style.height = `${height}px`
           cursorRef.current.style.display = 'block'
-          cursorRef.current.scrollIntoView({
-            block: 'nearest',
-            inline: 'nearest',
-          })
         }
       }
-      return
+    } else {
+      // Show selection
+      if (cursorRef.current) cursorRef.current.style.display = 'none'
+      if (selection && editorRef.current) {
+        const editorRect = editorRef.current.getBoundingClientRect()
+        const rects = calculateSelectionRects(editorRect)
+        updateSelectionRects(rects)
+      }
     }
+  }, [anchorPosition, focusPosition, selection, calculateSelectionRects, updateSelectionRects])
 
-    // 2. 선택이 있는 경우: 선택 영역 렌더링
-    if (cursorRef.current) cursorRef.current.style.display = 'none'
-    if (!anchorPosition || !focusPosition) return
+  // Button handlers for testing
+  const selectAll = useCallback(() => {
+    if (!editorRef.current) return
+    const start = CaretPosition.documentStart(editorRef.current)
+    const end = CaretPosition.documentEnd(editorRef.current)
+    if (start && end) {
+      updateSelection(start, end)
+    }
+  }, [updateSelection])
 
-    const editorRect = new DOMRect(
-      Math.round(editorRef.current.getBoundingClientRect().left),
-      Math.round(editorRef.current.getBoundingClientRect().top),
-      Math.round(editorRef.current.getBoundingClientRect().width),
-      Math.round(editorRef.current.getBoundingClientRect().height),
-    )
+  const clearSelection = useCallback(() => {
+    if (selection && !selection.isCollapsed()) {
+      collapseSelection(false)
+    }
+  }, [selection, collapseSelection])
 
-    const finalStyledRects = calculateSelectionRects(anchorPosition, focusPosition, editorRect)
-    updateSelectionRects(finalStyledRects)
-  }, [anchorPosition, focusPosition, getRectForPosition, updateSelectionRects])
+  const getSelectionInfo = useCallback(() => {
+    if (!selection) return 'No selection'
+
+    const direction = getSelectionDirection()
+    const text = getSelectionText()
+    const isCollapsed = selection.isCollapsed()
+
+    return {
+      direction,
+      isCollapsed,
+      text: text.substring(0, 50) + (text.length > 50 ? '...' : ''),
+      anchorNode: selection.anchor.node.nodeType === Node.TEXT_NODE ? 'Text' : 'Element',
+      focusNode: selection.focus.node.nodeType === Node.TEXT_NODE ? 'Text' : 'Element',
+      anchorOffset: selection.anchor.offset,
+      focusOffset: selection.focus.offset,
+    }
+  }, [selection, getSelectionDirection, getSelectionText])
 
   return (
     <div className="container">
-      <div ref={editorRef} className="editor" onMouseDown={handleMouseDown} onKeyDown={hotkeyHandler} tabIndex={0}>
-        <section style={{ display: 'contents' }}>
-          <div ref={cursorRef} className={`custom-cursor ${isBlinking ? 'blinking' : ''}`} />
-          {/* 선택 영역 렌더링 */}
-          {selectionRects.map((rect, i) => (
-            <div
-              key={i}
-              className="selection-rect"
-              style={{
-                top: rect.top,
-                left: rect.left,
-                width: rect.width,
-                height: rect.height,
-              }}
-            />
-          ))}
-        </section>
+      <h1>Enhanced useSelection Test Page</h1>
 
-        {/* --- 적당히 복잡한 리치 텍스트 예시 --- */}
-        <h2>Welcome to the Demo</h2>
-        <p>
-          This is a demonstration of a custom cursor implementation. It uses a <b>non-contenteditable</b> div. You can click anywhere on
-          this text.
+      {/* Control Panel */}
+      <div style={{ marginBottom: '20px', padding: '10px', background: '#f5f5f5', borderRadius: '5px' }}>
+        <h3>Controls:</h3>
+        <button onClick={selectAll} style={{ marginRight: '10px' }}>
+          Select All (Ctrl+A)
+        </button>
+        <button onClick={clearSelection} style={{ marginRight: '10px' }}>
+          Clear Selection (Esc)
+        </button>
+
+        <p style={{ margin: '10px 0', fontSize: '14px', color: '#666' }}>
+          <strong>Atomic Components:</strong> Tables and HR elements (highlighted in blue) are treated as single units. Try clicking on them
+          or navigating through them with arrow keys.
         </p>
-        <blockquote>
-          The cursor you see is a simple <code>&lt;div&gt;</code> element, positioned absolutely based on calculations using{' '}
-          <i>`document.caretPositionFromPoint`</i>.
-        </blockquote>
-        <ul>
-          <li>List item one. Try navigating from here.</li>
+
+        <h4>Keyboard Shortcuts:</h4>
+        <ul style={{ fontSize: '12px', margin: '5px 0' }}>
           <li>
-            Another list item, with some <code>inline code</code>.
+            <strong>Arrow Keys:</strong> Move cursor
           </li>
-          <li>Final item in this list. Notice how the cursor height adapts to the line height.</li>
+          <li>
+            <strong>Shift + Arrow Keys:</strong> Extend selection
+          </li>
+          <li>
+            <strong>Home/End:</strong> Move to line start/end
+          </li>
+          <li>
+            <strong>Shift + Home/End:</strong> Select to line start/end
+          </li>
+          <li>
+            <strong>Ctrl/Cmd + Arrow Keys:</strong> Move to word/document boundaries
+          </li>
+          <li>
+            <strong>Shift + Ctrl/Cmd + Arrow Keys:</strong> Extend selection to boundaries
+          </li>
+          <li>
+            <strong>Mouse:</strong> Click to position, drag to select
+          </li>
+          <li>
+            <strong>Shift + Click:</strong> Extend selection
+          </li>
+          <li>
+            <strong>Double Click:</strong> Select word
+          </li>
+          <li>
+            <strong>Triple Click:</strong> Select paragraph
+          </li>
         </ul>
+      </div>
+
+      {/* Selection Info */}
+      <div style={{ marginBottom: '20px', padding: '10px', background: '#e8f4f8', borderRadius: '5px' }}>
+        <h4>Selection Info:</h4>
+        <pre style={{ fontSize: '12px', margin: 0 }}>{JSON.stringify(getSelectionInfo(), null, 2)}</pre>
+      </div>
+
+      {/* Editor */}
+      <div
+        ref={editorRef}
+        className="editor"
+        onMouseDown={handleMouseDown}
+        onKeyDown={hotkeyHandler}
+        tabIndex={0}
+        style={{ position: 'relative', minHeight: '400px' }}
+      >
+        {/* Cursor */}
+        <div ref={cursorRef} className={`custom-cursor ${isBlinking ? 'blinking' : ''}`} />
+
+        {/* Selection rectangles */}
+        {selectionRects.map((rect, i) => (
+          <div
+            key={i}
+            className="selection-rect"
+            style={{
+              position: 'absolute',
+              top: rect.top,
+              left: rect.left,
+              width: rect.width,
+              height: rect.height,
+              backgroundColor: 'rgba(0, 123, 255, 0.3)',
+              pointerEvents: 'none',
+            }}
+          />
+        ))}
+
+        {/* Test Content */}
+        <h2>Welcome to Enhanced Selection Test</h2>
         <p>
-          The goal is to provide a solid foundation for building a markdown editor where the view is a direct reflection of the model,
-          without the quirks of <code>contenteditable</code>.
+          This is a test page for the enhanced <strong>useSelection</strong> hook. You can interact with this text using various keyboard
+          shortcuts and mouse operations.
         </p>
-        <pre>
-          <code>
-            {`function helloWorld() {
-  console.log("Hello, developer!");
-}`}
-          </code>
-        </pre>
+
+        <blockquote>
+          Try different selection methods: use arrow keys with Shift to extend selection, double-click to select words, triple-click to
+          select paragraphs, and drag with the mouse.
+        </blockquote>
+
+        <ul>
+          <li>
+            First list item with some <em>emphasized text</em>
+          </li>
+          <li>
+            Second item with <code>inline code</code>
+          </li>
+          <li>
+            Third item with a <a href="#">link</a> in it
+          </li>
+        </ul>
+
         <p>
-          You can move the cursor with <b>Arrow Keys</b>. The up and down arrow keys try to maintain the horizontal position (Goal-X).
-          Thanks to <span className="atomic-component mention blue">@john_doe</span> for the feedback on cursor navigation!
+          The selection system now uses the enhanced <code>CaretPosition</code> class and <code>Selection</code> class internally, providing
+          rich functionality for cursor positioning and text selection management.
+        </p>
+
+        <div style={{ border: '2px solid #ddd', padding: '15px', margin: '20px 0' }}>
+          <h3>Boxed Content</h3>
+          <p>This content is inside a bordered container. Test how selection works across different elements.</p>
+        </div>
+
+        <p>
+          You can use <strong>Ctrl+A</strong> (or <strong>Cmd+A</strong> on Mac) to select all text, and <strong>Escape</strong> to clear
+          the selection.
         </p>
 
         <hr className="atomic-component" />
 
-        <h3>Advanced Content</h3>
+        <h3>Atomic Components Test</h3>
         <p>
-          This section includes more complex structures like tables and layouts. Shout out to{' '}
-          <span className="atomic-component mention purple">@alice_dev</span> and{' '}
-          <span className="atomic-component mention green">@bob_designer</span> for their contributions!
+          The following elements are treated as <strong>atomic components</strong> - they behave as single units that cannot be entered with
+          the cursor. You can only position the cursor before or after them.
         </p>
 
-        <table className="atomic-component">
+        <table className="atomic-component" style={{ borderCollapse: 'collapse', width: '100%', margin: '10px 0' }}>
           <thead>
             <tr>
-              <th>Product</th>
-              <th>Category</th>
-              <th>Price</th>
-              <th>In Stock</th>
+              <th style={{ border: '1px solid #ccc', padding: '8px', background: '#f0f0f0' }}>Product</th>
+              <th style={{ border: '1px solid #ccc', padding: '8px', background: '#f0f0f0' }}>Price</th>
+              <th style={{ border: '1px solid #ccc', padding: '8px', background: '#f0f0f0' }}>Stock</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td>Laptop Pro</td>
-              <td>Electronics</td>
-              <td>$1499.99</td>
-              <td>
-                <b>Yes</b>
-              </td>
+              <td style={{ border: '1px solid #ccc', padding: '8px' }}>Laptop</td>
+              <td style={{ border: '1px solid #ccc', padding: '8px' }}>$1,299</td>
+              <td style={{ border: '1px solid #ccc', padding: '8px' }}>15</td>
             </tr>
             <tr>
-              <td>Coffee Mug</td>
-              <td>Kitchenware</td>
-              <td>$12.50</td>
-              <td>Yes</td>
+              <td style={{ border: '1px solid #ccc', padding: '8px' }}>Mouse</td>
+              <td style={{ border: '1px solid #ccc', padding: '8px' }}>$29</td>
+              <td style={{ border: '1px solid #ccc', padding: '8px' }}>50</td>
             </tr>
             <tr>
-              <td>Running Shoes</td>
-              <td>Apparel</td>
-              <td>$89.90</td>
-              <td>
-                <i>No</i>
-              </td>
+              <td style={{ border: '1px solid #ccc', padding: '8px' }}>Keyboard</td>
+              <td style={{ border: '1px solid #ccc', padding: '8px' }}>$89</td>
+              <td style={{ border: '1px solid #ccs', padding: '8px' }}>25</td>
             </tr>
           </tbody>
         </table>
 
-        <p>adlkfajsdk fljdsa klfsjkljdas</p>
+        <p>
+          Try clicking on the table above. Notice how the cursor can only be positioned at the beginning or end of the table, not inside it.
+          Use arrow keys to navigate around it.
+        </p>
 
-        <p>adlkfajsdk fljdsa klfsjkljdas</p>
-        <p>adlkfajsdk fljdsa klfsjkljdas</p>
-      </div>
+        <hr className="atomic-component" />
 
-      <div style={{ display: 'flex', gap: '20px', marginTop: '20px' }}>
-        <div style={{ flex: 1, border: '1px solid #ccc', padding: '10px' }}>
-          <h4>Column One</h4>
-          <p>This is the first column of a two-column layout. You should be able to navigate within this text block seamlessly.</p>
+        <p>
+          The horizontal rules (HR elements) above and below are also atomic components. Try navigating through them with arrow keys or
+          clicking near them.
+        </p>
+
+        <div style={{ display: 'flex', gap: '20px', margin: '20px 0' }}>
+          <div style={{ flex: 1 }}>
+            <h4>Left Column</h4>
+            <p>Some text before the table.</p>
+
+            <table className="atomic-component" style={{ borderCollapse: 'collapse', width: '100%' }}>
+              <tr>
+                <td style={{ border: '1px solid #666', padding: '6px' }}>Cell A</td>
+                <td style={{ border: '1px solid #666', padding: '6px' }}>Cell B</td>
+              </tr>
+              <tr>
+                <td style={{ border: '1px solid #666', padding: '6px' }}>Cell C</td>
+                <td style={{ border: '1px solid #666', padding: '6px' }}>Cell D</td>
+              </tr>
+            </table>
+
+            <p>Some text after the table.</p>
+          </div>
+
+          <div style={{ flex: 1 }}>
+            <h4>Right Column</h4>
+            <p>Testing atomic components in a multi-column layout.</p>
+
+            <hr className="atomic-component" />
+
+            <p>Notice how the cursor navigation works around these atomic elements.</p>
+          </div>
         </div>
-        <div style={{ flex: 1, border: '1px solid #ccc', padding: '10px' }}>
-          <h4>Column Two</h4>
-          <p>And this is the second column. Try moving the cursor between the columns using the up and down arrow keys.</p>
-        </div>
-      </div>
 
-      <DebugPanel
-        anchor={anchorPosition}
-        focus={focusPosition}
-        goalX={goalX}
-        isDragging={isDragging}
-        isBlinking={isBlinking}
-        selectionRects={selectionRects}
-      />
+        <pre style={{ background: '#f8f8f8', padding: '10px', overflow: 'auto' }}>
+          {`function example() {
+  console.log("This is code content");
+  const result = performCalculation();
+  return result;
+}`}
+        </pre>
+
+        <hr className="atomic-component" />
+
+        <h4>Test Instructions for Atomic Components:</h4>
+        <ol>
+          <li>
+            <strong>Click Tests:</strong>
+            <ul>
+              <li>Click directly on a table - cursor should position at start or end</li>
+              <li>Click on the left half of a table - cursor goes to start</li>
+              <li>Click on the right half of a table - cursor goes to end</li>
+              <li>Click on HR elements - same behavior as tables</li>
+            </ul>
+          </li>
+          <li>
+            <strong>Keyboard Navigation:</strong>
+            <ul>
+              <li>Use arrow keys to navigate into and out of atomic components</li>
+              <li>Try Shift + arrow keys to select across atomic components</li>
+              <li>Test Home/End keys around atomic components</li>
+            </ul>
+          </li>
+          <li>
+            <strong>Selection Tests:</strong>
+            <ul>
+              <li>Try selecting text that includes atomic components</li>
+              <li>Double-click near atomic components</li>
+              <li>Use Ctrl+A to select all (including atomic components)</li>
+            </ul>
+          </li>
+        </ol>
+
+        <p>
+          Test navigation with <strong>Home</strong>/<strong>End</strong> keys to move to line boundaries, and <strong>Ctrl+Home</strong>/
+          <strong>Ctrl+End</strong> to move to document boundaries.
+        </p>
+      </div>
     </div>
   )
 }
