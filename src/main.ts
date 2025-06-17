@@ -1,5 +1,5 @@
 import { iter } from './Iterator'
-import { calculateVerticalOverlapRatio, findBestPosition } from './DOMRect'
+import { calculateVerticalOverlapRatio, debugRect, findBestPosition } from './DOMRect'
 
 export const isTextNode = (node: Node | null): node is Text => node?.nodeType === Node.TEXT_NODE
 export const isElementNode = (node: Node | null): node is Element => node?.nodeType === Node.ELEMENT_NODE
@@ -168,8 +168,13 @@ function normalizePosition(editor: Editor, node: Node, offset: number): Position
           return { node: current_node, offset: 0 }
         }
 
-        current_node = previousNode as Text
-        current_offset += getAfterOffset(current_node)
+        if (isTextNode(previousNode)) {
+          current_node = previousNode
+          current_offset += getAfterOffset(current_node)
+        } else {
+          // Atomic component
+          return { node: previousNode, offset: 1 }
+        }
       } else if (current_offset > getAfterOffset(current_node)) {
         const walker = editor.createTreeWalker()
         walker.currentNode = current_node
@@ -182,8 +187,14 @@ function normalizePosition(editor: Editor, node: Node, offset: number): Position
         if (!nextNode) {
           return { node: current_node, offset: getAfterOffset(current_node) }
         }
-        current_offset -= getAfterOffset(current_node)
-        current_node = nextNode as Text
+
+        if (isTextNode(nextNode)) {
+          current_offset -= getAfterOffset(current_node)
+          current_node = nextNode
+        } else {
+          // Atomic component
+          return { node: nextNode, offset: 0 }
+        }
       } else {
         return { node: current_node, offset: current_offset }
       }
@@ -343,6 +354,8 @@ class EditorRange {
     if (reversed) {
       return rects.reverse()
     }
+
+    // debugRect(rects)
     return rects
   }
 }
@@ -421,10 +434,8 @@ class EditorSelection {
   }
 
   extend(node: Node, offset: number) {
-    if (!this.anchor) return
-
     const focus = normalizePosition(this.editor, node, offset)
-    this.focus = { node: focus.node, offset: focus.offset }
+    this.setBaseAndExtent(this.anchor!.node, this.anchor!.offset, focus.node, focus.offset)
   }
 
   setBaseAndExtent(anchorNode: Node, anchorOffset: number, focusNode: Node, focusOffset: number) {
@@ -442,8 +453,55 @@ class EditorSelection {
     if (!this.focus) return null
 
     if (granularity === 'character') {
+      const { node, offset } = this.focus
+
+      if (isAtomicComponent(node)) {
+        if (direction === 'forward') {
+          if (offset === 0) {
+            return { node, offset: 1 }
+          }
+        } else {
+          // backward
+          if (offset === 1) {
+            return { node, offset: 0 }
+          }
+        }
+
+        const walker = this.editor.createTreeWalker()
+        walker.currentNode = node
+
+        if (direction === 'forward') {
+          const iter = walker.forward()
+          iter.next() // skip self
+          const result = iter.next()
+          if (result.done) {
+            return { node, offset: 1 } // End of document, stay at the end of current atomic component
+          }
+          return { node: result.value, offset: 0 }
+        } else {
+          // backward
+          const iter = walker.backward()
+          iter.next() // skip self
+          const result = iter.next()
+          if (result.done) {
+            return { node, offset: 0 } // Start of document, stay at the beginning of current atomic component
+          }
+          const prevNode = result.value
+          return { node: prevNode, offset: getAfterOffset(prevNode) }
+        }
+      }
+
       const directionValue = direction === 'forward' ? 1 : -1
-      return { node: this.focus.node, offset: this.focus.offset + directionValue }
+      return { node, offset: offset + directionValue }
+    }
+
+    if (granularity === 'lineboundary' && isAtomicComponent(this.focus.node)) {
+      if (direction === 'forward' && this.focus.offset === 0) {
+        return { node: this.focus.node, offset: 1 }
+      }
+      if (direction === 'backward' && this.focus.offset === 1) {
+        return { node: this.focus.node, offset: 0 }
+      }
     }
 
     const rectWalker = this.editor.createRangeRectWalker()
@@ -503,13 +561,18 @@ class EditorSelection {
       this.goalX = null
     }
 
-    const newFocusPosition = this.calculateNewPosition(direction, granularity)
+    let newFocusPosition = this.calculateNewPosition(direction, granularity)
     if (!newFocusPosition) return
 
     if (type === 'move') {
       this.collapse(newFocusPosition.node, newFocusPosition.offset)
     } else {
       this.extend(newFocusPosition.node, newFocusPosition.offset)
+    }
+
+    if (granularity === 'character' && this.focus.node.nodeName === 'BR') {
+      this.modify('move', direction, 'character')
+      return
     }
   }
 }
@@ -582,20 +645,25 @@ class EditorRangeRectWalker {
       }
     }
 
-    const walker = this.editor.createTreeWalker()
-    walker.currentNode = startNode
-
-    const node = walker.currentNode
-    const range = this.editor.createRange()
-    const reversed = direction === 'backward'
-    reversed ? range.setEnd(node, startOffset) : range.setStart(node, startOffset)
-    yield* processNode(node, range.getClientRects(reversed))
-    reversed ? range.setStartBefore(node) : range.setEndAfter(node)
-    yield* processNode(node, range.getClientRects(reversed))
-
     const iteratorWalker = this.editor.createTreeWalker()
-    iteratorWalker.currentNode = node
+    iteratorWalker.currentNode = startNode
     const iterator = direction === 'forward' ? iteratorWalker.forward() : iteratorWalker.backward()
+
+    const range = this.editor.createRange()
+
+    // Handle startNode with offset
+    const firstNode = iterator.next().value
+    if (firstNode) {
+      if (direction === 'forward') {
+        range.setStart(firstNode, startOffset)
+        range.setEndAfter(firstNode)
+      } else {
+        range.setEnd(firstNode, startOffset)
+        range.setStartBefore(firstNode)
+      }
+      const reversed = direction === 'backward'
+      yield* processNode(firstNode, range.getClientRects(reversed))
+    }
 
     for (const nextNode of iterator) {
       range.selectNode(nextNode)
@@ -820,6 +888,7 @@ export const keyBindings: Record<string, KeyBindingCommand> = {
       return selection.collapseToEnd()
     }
     selection.modify('move', 'forward', 'character')
+    console.log('@@@', selection)
   },
   'Shift+ArrowRight': (selection) => {
     selection.modify('extend', 'forward', 'character')
