@@ -21,6 +21,22 @@ describe('Line boundary movement', () => {
   }
 
   it('should move cursor to the end of the line', () => {
+    const editor = setupEditor(`<p>
+          The selection system now uses the enhanced
+          <code>CaretPosition</code> class and <code>Selection</code><br/>class internally, providing rich functionality for cursor positioning
+          and text selection management.
+        </p>`)
+    const textNode = editor.document.querySelector('p')!.firstChild as Text
+    const selection = editor.getSelection()
+    selection.collapse(textNode, 5) // "Hello World" 중간에 커서 위치
+
+    selection.modify('move', 'forward', 'lineboundary')
+
+    expect(selection.focus?.node).toBe(textNode)
+    expect(selection.focus?.offset).toBe(11)
+  })
+
+  it('should move cursor to the end of the line', () => {
     const editor = setupEditor('<div>Hello World</div>')
     const textNode = editor.document.querySelector('div')!.firstChild as Text
     const selection = editor.getSelection()

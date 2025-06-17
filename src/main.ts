@@ -511,6 +511,7 @@ class EditorSelection {
         .takeWhile((pos) => pos.lineOffset === 0)
         .toArray()
 
+      debugRect(linePositions.map((pos) => pos.rect))
       if (linePositions.length === 0) return null
 
       const targetPos = linePositions[linePositions.length - 1]
@@ -632,11 +633,12 @@ class EditorRangeRectWalker {
       for (const rect of rects) {
         if (!lineAnchorRect) {
           lineAnchorRect = rect
-        } else if (direction === 'forward' && lineAnchorRect.bottom > rect.bottom) {
-          continue
-        } else if (direction === 'backward' && lineAnchorRect.top < rect.top) {
-          continue
         } else if (calculateVerticalOverlapRatio(lineAnchorRect, rect) < 0.5) {
+          if (direction === 'forward' && lineAnchorRect.bottom > rect.bottom) {
+            continue
+          } else if (direction === 'backward' && lineAnchorRect.top < rect.top) {
+            continue
+          }
           lineOffset += lineOffsetIncrement
           lineAnchorRect = rect
         }
@@ -653,15 +655,18 @@ class EditorRangeRectWalker {
 
     // Handle startNode with offset
     const firstNode = iterator.next().value
+    const reversed = direction === 'backward'
+
     if (firstNode) {
       if (direction === 'forward') {
         range.setStart(firstNode, startOffset)
+        yield* processNode(firstNode, range.getClientRects())
         range.setEndAfter(firstNode)
       } else {
         range.setEnd(firstNode, startOffset)
+        yield* processNode(firstNode, range.getClientRects(reversed))
         range.setStartBefore(firstNode)
       }
-      const reversed = direction === 'backward'
       yield* processNode(firstNode, range.getClientRects(reversed))
     }
 
@@ -754,15 +759,15 @@ export class Editor {
 
       if (isAtomicComponent(leaf)) {
         const rect = (leaf as Element).getBoundingClientRect()
-        console.log('@@@', rect, x)
         return { node: leaf, offset: x < rect.left + rect.width / 2 ? 0 : 1 }
       }
 
-      const position2 = this.document.ownerDocument.caretPositionFromPoint(x, y)
-      console.log('@@@1', position2, x)
-      console.log('@@@2', leaf)
+      const precisePosition = this.document.ownerDocument.caretPositionFromPoint(x, y)
+      if (precisePosition) {
+        return { node: precisePosition.offsetNode, offset: precisePosition.offset }
+      }
 
-      const rect = (leaf as Element).getBoundingClientRect()
+      // Fallback to the beginning of the leaf if the precise call fails.
       return { node: leaf, offset: 0 }
     }
 
@@ -951,11 +956,8 @@ export function main() {
   selection.setRange(range)
   view.render()
 
-  // console.log('resres', res)
-  //
-
   for (let i = 0; i < 10; i++) {
-    selection.modify('move', 'forward', 'character')
+    selection.modify('move', 'forward', 'lineboundary')
     view.render()
   }
 
