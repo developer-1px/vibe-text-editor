@@ -93,6 +93,20 @@ class IteratorOps<T> {
     )
   }
 
+  scan<U>(reducer: (acc: U, item: T) => U, initialValue: U): IteratorOps<U> {
+    const self = this
+    return new IteratorOps(
+      (function* () {
+        let acc = initialValue
+        yield acc
+        for (const item of self.iterator) {
+          acc = reducer(acc, item)
+          yield acc
+        }
+      })(),
+    )
+  }
+
   // === 부가 작업 ===
   tap(callback: (item: T) => void): IteratorOps<T> {
     const self = this
@@ -140,6 +154,29 @@ class IteratorOps<T> {
       if (predicate(item)) return item
     }
     return null
+  }
+
+  reduce<U>(reducer: (acc: U, item: T) => U, initialValue: U): U
+  reduce(reducer: (acc: T, item: T) => T): T | null
+  reduce<U>(reducer: (acc: T | U, item: T) => T | U, initialValue?: U): T | U | null {
+    const it = this.iterator[Symbol.iterator]()
+    let acc: T | U
+
+    if (arguments.length >= 2) {
+      acc = initialValue as U
+    } else {
+      const first = it.next()
+      if (first.done) {
+        return null
+      }
+      acc = first.value
+    }
+
+    for (const item of { [Symbol.iterator]: () => it }) {
+      acc = reducer(acc, item)
+    }
+
+    return acc
   }
 
   some(predicate: (item: T) => boolean): boolean {
