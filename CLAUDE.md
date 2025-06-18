@@ -72,3 +72,7 @@ The editor provides DOM-like APIs while abstracting away native DOM selection co
 - **Limit file size** - Split files when they exceed ~300 lines
 - **Keep API changes minimal** - Avoid making too many modifications at once
 - **Programmatic API style** - Write APIs in a programmatic manner
+- **Korean documentation** - All documentation files should be written in Korean
+- **DOM as logical model** - Use DOM itself as the logical model instead of creating separate logical structures
+- **Generator-based traversal** - Implement core traversal models using generators and pipes for declarative composition
+- **TDD development** - Use Test-Driven Development approach: write one test, implement to pass, write next test, implement, repeat step by step
