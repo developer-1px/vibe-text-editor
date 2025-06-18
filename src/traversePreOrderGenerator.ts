@@ -1,11 +1,11 @@
 import type { Position } from './main'
 
 export function* traversePreOrderGenerator(
-  root: Node,
-  startNode: Position,
+  root: Element,
+  startNode: Node,
   acceptNode: (node: Node) => false | unknown = () => {},
 ): Generator<Node, void, unknown> {
-  let node: Node | null = startNode.node
+  let node: Node | null = startNode
   if (!root.contains(node)) {
     throw new Error('startNode is not a child of root')
   }
@@ -32,11 +32,11 @@ export function* traversePreOrderGenerator(
 }
 
 export function* traversePreOrderBackwardGenerator(
-  root: Node,
-  startNode: Position,
+  root: Element,
+  startNode: Node,
   acceptNode: (node: Node) => false | unknown = () => {},
 ): Generator<Node, void, unknown> {
-  let node: Node | null = startNode.node
+  let node: Node | null = startNode
   if (!root.contains(node)) {
     throw new Error('startNode is not a child of root')
   }

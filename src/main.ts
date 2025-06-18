@@ -1,6 +1,7 @@
 import { iter } from './Iterator'
 import { calculateVerticalOverlapRatio, debugRect, findBestPosition } from './DOMRect'
 import { traversePreOrderGenerator, traversePreOrderBackwardGenerator } from './traversePreOrderGenerator'
+import { normalizeDocument } from './normalizeDocument'
 
 export const isTextNode = (node: Node | null): node is Text => node?.nodeType === Node.TEXT_NODE
 export const isElementNode = (node: Node | null): node is Element => node?.nodeType === Node.ELEMENT_NODE
@@ -91,19 +92,27 @@ class EditorTreeWalker {
 }
 
 export class Position {
-  constructor(public node: Node, public offset: number) {}
+  constructor(public editor: Editor, public node: Node, public offset: number) {}
+
+  clone(node: Node, offset: number = 0) {
+    return new Position(this.editor, node, offset)
+  }
+
+  nextCharacter(offset: number = 1) {
+    return this.clone(this.node, this.offset + offset)
+  }
 }
 
 function normalizePosition(editor: Editor, node: Node, offset: number): Position {
   if (!node) {
-    return { node: editor.document, offset: 0 }
+    return editor.createPosition(editor.document, 0)
   }
 
   const maxOffset = getAfterOffset(node)
 
   // 정상 범위
   if (offset >= 0 && offset <= maxOffset) {
-    return { node, offset }
+    return editor.createPosition(node, offset)
   }
 
   const isForward = offset > maxOffset
@@ -112,7 +121,7 @@ function normalizePosition(editor: Editor, node: Node, offset: number): Position
   let remains = isForward ? offset : Math.abs(offset)
 
   const targetNode = iter(
-    traverser(editor.document, new Position(node, 0), (node) => {
+    traverser(editor.document, node, (node) => {
       if (isAtomicComponent(node)) {
         return false
       }
@@ -130,9 +139,9 @@ function normalizePosition(editor: Editor, node: Node, offset: number): Position
     throw new Error(errorMsg)
   }
 
-  const finalOffset = isForward ? getAfterOffset(targetNode) + remains - 1 : Math.abs(remains) + 1
+  const finalOffset = isForward ? getAfterOffset(targetNode) + remains : Math.abs(remains)
 
-  return { node: targetNode, offset: finalOffset }
+  return editor.createPosition(targetNode, finalOffset)
 }
 
 class EditorRangeRectWalker {
@@ -152,16 +161,18 @@ class EditorRangeRectWalker {
     startNode: Node,
     startOffset: number = 0,
     direction: 'forward' | 'backward',
-  ): Generator<{ node: Node; rect: DOMRect; lineOffset: number }> {
+  ): Generator<{ node: Node; rect: DOMRect; lineOffset: number; lineBoundary: boolean }> {
     let lineOffset = 0
     let lineAnchorRect: DOMRect | null = null
+    let lineBoundary = true
     const lineOffsetIncrement = direction === 'forward' ? 1 : -1
 
-    const processNode = function* (node: Node, rects: DOMRect[]): Generator<{ node: Node; rect: DOMRect; lineOffset: number }> {
+    const processNode = function* (node: Node, rects: DOMRect[]) {
       for (const rect of rects) {
         if (!lineAnchorRect) {
           lineAnchorRect = rect
         } else if (calculateVerticalOverlapRatio(lineAnchorRect, rect) < 0.5) {
+          lineBoundary = false
           if (direction === 'forward' && lineAnchorRect.bottom > rect.bottom) {
             continue
           } else if (direction === 'backward' && lineAnchorRect.top < rect.top) {
@@ -171,7 +182,7 @@ class EditorRangeRectWalker {
           lineAnchorRect = rect
         }
 
-        yield { node, rect, lineOffset }
+        yield { node, rect, lineOffset, lineBoundary }
       }
     }
 
@@ -186,13 +197,15 @@ class EditorRangeRectWalker {
     const reversed = direction === 'backward'
 
     if (firstNode) {
+      console.log('firstNode', firstNode, direction)
+
       if (direction === 'forward') {
         range.setStart(firstNode, startOffset)
-        yield* processNode(firstNode, range.getClientRects())
+        yield* processNode(firstNode, range.getClientRects().slice(0, 1))
         range.setEndAfter(firstNode)
       } else {
         range.setEnd(firstNode, startOffset)
-        yield* processNode(firstNode, range.getClientRects(reversed))
+        yield* processNode(firstNode, range.getClientRects().slice(0, 1))
         range.setStartBefore(firstNode)
       }
       yield* processNode(firstNode, range.getClientRects(reversed))
@@ -203,15 +216,6 @@ class EditorRangeRectWalker {
       const rects = Array.from(range.getClientRects(direction === 'backward'))
       yield* processNode(nextNode, rects)
     }
-  }
-
-  getNextLine(node: Node, offset: number, targetLineOffset: number) {
-    const direction: 'forward' | 'backward' = offset >= 0 ? 'forward' : 'backward'
-    const linePositions = iter(this.walk(node, offset, direction))
-      .takeWhile((pos) => Math.abs(pos.lineOffset) < Math.abs(targetLineOffset))
-      .toArray()
-
-    return linePositions
   }
 }
 
@@ -360,11 +364,15 @@ class EditorRange {
     return rects
   }
 
+  getBoundingClientRect() {
+    return this.toRange().getBoundingClientRect()
+  }
+
   //
   deleteContents(): Position {
     const range = this.toRange()
     range.deleteContents()
-    return { node: range.startContainer, offset: range.startOffset }
+    return this.editor.createPosition(range.startContainer, range.startOffset)
   }
 }
 
@@ -411,8 +419,8 @@ class EditorSelection {
 
   setRange(range: EditorRange) {
     if (range.startContainer) {
-      this.anchor = { node: range.startContainer, offset: range.startOffset }
-      this.focus = { node: range.endContainer || range.startContainer, offset: range.endOffset }
+      this.anchor = this.editor.createPosition(range.startContainer, range.startOffset)
+      this.focus = this.editor.createPosition(range.endContainer || range.startContainer, range.endOffset)
     } else {
       this.anchor = null
       this.focus = null
@@ -422,7 +430,7 @@ class EditorSelection {
   collapseToStart() {
     const range = this.range
     if (range.startContainer) {
-      this.focus = { node: range.startContainer, offset: range.startOffset }
+      this.focus = this.editor.createPosition(range.startContainer, range.startOffset)
       this.anchor = this.focus
     }
   }
@@ -430,14 +438,14 @@ class EditorSelection {
   collapseToEnd() {
     const range = this.range
     if (range.endContainer) {
-      this.focus = { node: range.endContainer, offset: range.endOffset }
+      this.focus = this.editor.createPosition(range.endContainer, range.endOffset)
       this.anchor = this.focus
     }
   }
 
   collapse(offsetNode: Node, offset: number) {
     const position = normalizePosition(this.editor, offsetNode, offset)
-    this.focus = { node: position.node, offset: position.offset }
+    this.focus = this.editor.createPosition(position.node, position.offset)
     this.anchor = this.focus
   }
 
@@ -450,8 +458,8 @@ class EditorSelection {
     const anchor = normalizePosition(this.editor, anchorNode, anchorOffset)
     const focus = normalizePosition(this.editor, focusNode, focusOffset)
 
-    this.anchor = { node: anchor.node, offset: anchor.offset }
-    this.focus = { node: focus.node, offset: focus.offset }
+    this.anchor = this.editor.createPosition(anchor.node, anchor.offset)
+    this.focus = this.editor.createPosition(focus.node, focus.offset)
   }
 
   private calculateNewPosition(
@@ -461,38 +469,40 @@ class EditorSelection {
     if (!this.focus) return null
 
     if (granularity === 'character') {
-      const { node, offset } = this.focus
-      return { node, offset: offset + (direction === 'forward' ? 1 : -1) }
+      return this.focus.nextCharacter(direction === 'forward' ? 1 : -1)
     }
 
     // lineboundary
+
+    // @FIXME:
     if (granularity === 'lineboundary' && isAtomicComponent(this.focus.node)) {
       if (direction === 'forward' && this.focus.offset === 0) {
-        return { node: this.focus.node, offset: 1 }
+        return this.editor.createPosition(this.focus.node, 1)
       }
       if (direction === 'backward' && this.focus.offset === 1) {
-        return { node: this.focus.node, offset: 0 }
+        return this.editor.createPosition(this.focus.node, 0)
       }
     }
 
-    const rectWalker = this.editor.createRangeRectWalker()
-
     if (granularity === 'lineboundary') {
-      const linePositions = iter(rectWalker.walk(this.focus.node, this.focus.offset, direction))
-        .takeWhile((pos) => pos.lineOffset === 0)
-        .toArray()
+      const rectWalker = this.editor.createRangeRectWalker()
+      const targetPosition = iter(rectWalker.walk(this.focus.node, this.focus.offset, direction))
+        .takeWhile((pos) => pos.lineBoundary)
+        .last()
 
-      debugRect(linePositions.map((pos) => pos.rect))
-      if (linePositions.length === 0) return null
+      if (!targetPosition) return null
 
-      const targetPos = linePositions[linePositions.length - 1]
-      if (!targetPos) return null
+      const targetRect = targetPosition.rect
+      const x = direction === 'forward' ? targetRect.right : targetRect.left
+      const y = targetRect.top
 
-      const targetRect = targetPos.rect
-      const goalX = direction === 'forward' ? targetRect.right - 1 : targetRect.left
-      const y = targetRect.top + targetRect.height / 2
+      const r = this.editor.getPositionFromPoint(x, y)
 
-      return this.editor.getPositionFromPoint(goalX, y)
+      console.log('r', r)
+
+      debugRect([targetPosition.rect])
+
+      return r
     }
 
     if (granularity === 'line') {
@@ -503,6 +513,7 @@ class EditorSelection {
         this.goalX = cursorRects[0].left
       }
 
+      const rectWalker = this.editor.createRangeRectWalker()
       const targetLinePositions = iter(rectWalker.walk(this.focus.node, this.focus.offset, direction))
         .skipWhile((pos) => pos.lineOffset === 0)
         .takeWhile((pos) => Math.abs(pos.lineOffset) === 1)
@@ -513,10 +524,7 @@ class EditorSelection {
       const bestPos = findBestPosition(targetLinePositions, this.goalX!)
       if (!bestPos) return null
 
-      const targetRect = bestPos.rect
-      const y = targetRect.top + targetRect.height / 2
-
-      return this.editor.getPositionFromPoint(this.goalX, y)
+      return this.editor.getPositionFromPoint(this.goalX, bestPos.rect.top)
     }
 
     return null
@@ -583,35 +591,6 @@ const findAncestorAtomic = (node: Node, root: Node): Element | null => {
   return null
 }
 
-function normalizeDocument(doc: HTMLElement) {
-  // Remove extra spaces from text nodes
-  const walker = document.createTreeWalker(doc, NodeFilter.SHOW_ELEMENT, {
-    acceptNode: (node: Element) => {
-      const display = getComputedStyle(node).display
-      const isBlock = !display.includes('inline')
-      if (isBlock) {
-        if (isTextNode(node.firstChild)) {
-          node.firstChild.nodeValue = node.firstChild.nodeValue?.trimStart() || ''
-        }
-        if (isTextNode(node.lastChild)) {
-          node.lastChild.nodeValue = node.lastChild.nodeValue?.trimEnd() || ''
-        }
-        if (isTextNode(node.previousSibling)) {
-          node.previousSibling.nodeValue = node.previousSibling.nodeValue?.trimEnd() || ''
-        }
-        if (isTextNode(node.nextSibling)) {
-          node.nextSibling.nodeValue = node.nextSibling.nodeValue?.trimStart() || ''
-        }
-      }
-
-      return NodeFilter.FILTER_ACCEPT
-    },
-  })
-  while (walker.nextNode());
-  doc.normalize()
-  return doc
-}
-
 export class Editor {
   document: HTMLElement
   #selection: EditorSelection | null = null
@@ -628,6 +607,10 @@ export class Editor {
 
   createRangeRectWalker() {
     return new EditorRangeRectWalker(this)
+  }
+
+  createPosition(node: Node, offset: number = 0) {
+    return new Position(this, node, offset)
   }
 
   createRange() {
@@ -649,13 +632,12 @@ export class Editor {
 
   getPositionFromPoint(x: number, y: number): Position | null {
     const position = this.document.ownerDocument.caretPositionFromPoint(x, y)
-    console.log('@@@0', position, x)
     if (!position) return null
 
     const atomicAncestor = findAncestorAtomic(position.offsetNode, this.document)
     if (atomicAncestor) {
       const rect = atomicAncestor.getBoundingClientRect()
-      return { node: atomicAncestor, offset: x < rect.left + rect.width / 2 ? 0 : 1 }
+      return this.createPosition(atomicAncestor, x < rect.left + rect.width / 2 ? 0 : 1)
     }
 
     if (isElementNode(position.offsetNode)) {
@@ -668,19 +650,19 @@ export class Editor {
 
       if (isAtomicComponent(leaf)) {
         const rect = (leaf as Element).getBoundingClientRect()
-        return { node: leaf, offset: x < rect.left + rect.width / 2 ? 0 : 1 }
+        return this.createPosition(leaf, x < rect.left + rect.width / 2 ? 0 : 1)
       }
 
       const precisePosition = this.document.ownerDocument.caretPositionFromPoint(x, y)
       if (precisePosition) {
-        return { node: precisePosition.offsetNode, offset: precisePosition.offset }
+        return this.createPosition(precisePosition.offsetNode, precisePosition.offset)
       }
 
       // Fallback to the beginning of the leaf if the precise call fails.
-      return { node: leaf, offset: 0 }
+      return this.createPosition(leaf, 0)
     }
 
-    return { node: position.offsetNode, offset: position.offset }
+    return this.createPosition(position.offsetNode, position.offset)
   }
 }
 
@@ -689,6 +671,7 @@ class EditorView {
   document: HTMLElement
   #cursorElement: HTMLDivElement
   #selectionElements: HTMLDivElement[] = []
+  #inspectorElement: HTMLDivElement
   #baseStyle = {
     position: 'absolute',
     pointerEvents: 'none',
@@ -712,6 +695,21 @@ class EditorView {
     Object.assign(this.#cursorElement.style, this.#cursorStyle)
     this.document.style.position = 'relative'
     this.document.appendChild(this.#cursorElement)
+
+    this.#inspectorElement = document.createElement('div')
+    Object.assign(this.#inspectorElement.style, {
+      position: 'fixed',
+      bottom: '10px',
+      right: '10px',
+      backgroundColor: 'rgba(0,0,0,0.7)',
+      color: 'white',
+      padding: '10px',
+      borderRadius: '5px',
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      zIndex: '10000',
+    })
+    document.body.appendChild(this.#inspectorElement)
   }
 
   private createSelectionElement(rect: DOMRect, editorRect: DOMRect): HTMLDivElement {
@@ -734,6 +732,12 @@ class EditorView {
       height: rect.height + 'px',
       display: 'block',
     })
+
+    this.#cursorElement.scrollIntoView({
+      behavior: 'instant',
+      block: 'nearest',
+      inline: 'nearest',
+    })
   }
 
   render() {
@@ -755,6 +759,26 @@ class EditorView {
         rects.forEach((rect) => this.createSelectionElement(rect, editorRect))
       }
     }
+
+    const { anchor, focus } = selection
+    const formatNode = (node: Node | null) => {
+      if (!node) return 'null'
+      if (isTextNode(node)) {
+        return `#text "${node.textContent?.substring(0, 20).replace(/\n/g, '\\n') ?? ''}..."`
+      }
+      if (isElementNode(node)) {
+        return `<${node.nodeName.toLowerCase()}>`
+      }
+      return node.nodeName
+    }
+
+    this.#inspectorElement.innerHTML = `
+      <pre style="margin: 0;">
+isCollapsed: ${selection.isCollapsed}
+Anchor: ${formatNode(anchor?.node ?? null)} [${anchor?.offset}]
+Focus:  ${formatNode(focus?.node ?? null)} [${focus?.offset}]
+      </pre>
+    `.trim()
   }
 }
 
@@ -790,7 +814,6 @@ export const keyBindings: Record<string, KeyBindingCommand> = {
       return selection.collapseToEnd()
     }
     selection.modify('move', 'forward', 'character')
-    console.log('@@@', selection)
   },
   'Shift+ArrowRight': (selection) => {
     selection.modify('extend', 'forward', 'character')
@@ -869,6 +892,9 @@ export const keyBindings: Record<string, KeyBindingCommand> = {
     }
     selection.deleteFromDocument()
   },
+  '`': (selection) => {
+    console.log('selection', selection)
+  },
 }
 
 export function getKeyBindingString(e: KeyboardEvent): string | null {
@@ -932,16 +958,11 @@ export function main() {
   selection.setRange(range)
   view.render()
 
-  Array(20)
+  Array(3)
     .fill(0)
     .forEach(() => {
       selection.modify('move', 'forward', 'character')
     })
 
-  Array(2)
-    .fill(0)
-    .forEach(() => {
-      selection.modify('move', 'backward', 'character')
-    })
   view.render()
 }
