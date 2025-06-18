@@ -99,7 +99,7 @@ export class Position {
   }
 
   nextCharacter(offset: number = 1) {
-    return this.clone(this.node, this.offset + offset)
+    return normalizePosition(this.editor, this.node, this.offset + offset)
   }
 }
 
@@ -226,29 +226,35 @@ class EditorRange {
   editor: Editor
 
   private _range: Range | null = null
-  private _startContainer: Node | null = null
-  private _startOffset: number = 0
-  private _endContainer: Node | null = null
-  private _endOffset: number = 0
+  private _start: Position | null = null
+  private _end: Position | null = null
 
   get startContainer() {
-    return this._startContainer
+    return this._start?.node || null
   }
 
   get startOffset() {
-    return this._startOffset
+    return this._start?.offset || 0
   }
 
   get endContainer() {
-    return this._endContainer
+    return this._end?.node || null
   }
 
   get endOffset() {
-    return this._endOffset
+    return this._end?.offset || 0
+  }
+
+  get start() {
+    return this._start
+  }
+
+  get end() {
+    return this._end
   }
 
   get isCollapsed() {
-    return this._startContainer === this._endContainer && this._startOffset === this._endOffset
+    return this._start?.node === this._end?.node && this._start?.offset === this._end?.offset
   }
 
   constructor(editor: Editor) {
@@ -258,20 +264,16 @@ class EditorRange {
   private setBoundary(node: Node, offset: number, boundaryType: 'start' | 'end') {
     const position = normalizePosition(this.editor, node, offset)
     if (boundaryType === 'start') {
-      this._startContainer = position.node
-      this._startOffset = position.offset
+      this._start = position
 
-      if (!this._endContainer) {
-        this._endContainer = position.node
-        this._endOffset = position.offset
+      if (!this._end) {
+        this._end = position
       }
     } else {
-      this._endContainer = position.node
-      this._endOffset = position.offset
+      this._end = position
 
-      if (!this._startContainer) {
-        this._startContainer = position.node
-        this._startOffset = position.offset
+      if (!this._start) {
+        this._start = position
       }
     }
 
@@ -309,14 +311,15 @@ class EditorRange {
 
   collapse(toStart: boolean) {
     if (toStart) {
-      if (this.startContainer) {
-        this.setEnd(this.startContainer, this.startOffset)
+      if (this._start) {
+        this._end = this._start
       }
     } else {
-      if (this.endContainer) {
-        this.setStart(this.endContainer, this.endOffset)
+      if (this._end) {
+        this._start = this._end
       }
     }
+    this._range = null
   }
 
   //
@@ -332,9 +335,9 @@ class EditorRange {
 
     const range = document.createRange()
 
-    if (this._startContainer && this._endContainer) {
-      setRangeBoundary(range, this._startContainer, this._startOffset, 'start')
-      setRangeBoundary(range, this._endContainer, this._endOffset, 'end')
+    if (this._start && this._end) {
+      setRangeBoundary(range, this._start.node, this._start.offset, 'start')
+      setRangeBoundary(range, this._end.node, this._end.offset, 'end')
     }
 
     this._range = range
@@ -342,13 +345,13 @@ class EditorRange {
   }
 
   getClientRects(reversed: boolean = false) {
-    if (this._startContainer && this._endContainer && this._startContainer === this._endContainer && isElementNode(this._startContainer)) {
-      const rect = this._startContainer.getBoundingClientRect()
+    if (this._start && this._end && this._start.node === this._end.node && isElementNode(this._start.node)) {
+      const rect = this._start.node.getBoundingClientRect()
       const minHeight = 20
       const actualHeight = Math.max(rect.height, minHeight)
       const topAdjustment = (actualHeight - rect.height) / 2
 
-      if (this._startOffset === 0) {
+      if (this._start.offset === 0) {
         return [new DOMRect(rect.left, rect.top - topAdjustment, 0, actualHeight)]
       } else {
         return [new DOMRect(rect.right, rect.top - topAdjustment, 0, actualHeight)]
