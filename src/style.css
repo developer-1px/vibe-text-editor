@@ -40,3 +40,9 @@ h1 {
   margin: 0 auto;
   padding: 2rem;
 }
+
+.mention {
+  background-color: tomato;
+  padding: 2px 4px;
+  border-radius: 4px;
+}

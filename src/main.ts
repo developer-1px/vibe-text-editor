@@ -1,12 +1,12 @@
 import { iter } from './Iterator'
 import { calculateVerticalOverlapRatio, debugRect, findBestPosition } from './DOMRect'
-import { traversePreOrderGenerator, traversePreOrderBackwardGenerator } from './traversePreOrderGenerator'
 import { normalizeDocument } from './normalizeDocument'
+import { normalizePosition } from './normalizePosition'
 
 export const isTextNode = (node: Node | null): node is Text => node?.nodeType === Node.TEXT_NODE
 export const isElementNode = (node: Node | null): node is Element => node?.nodeType === Node.ELEMENT_NODE
 
-const getAfterOffset = (node: Node): number => (isTextNode(node) ? node.textContent?.length || 0 : 1)
+export const getAfterOffset = (node: Node): number => (isTextNode(node) ? node.textContent?.length || 0 : 1)
 
 const acceptNode = (node: Node): number => {
   if (isTextNode(node) || isAtomicComponent(node)) {
@@ -101,68 +101,6 @@ export class Position {
   nextCharacter(offset: number = 1) {
     return normalizePosition(this.editor, this.node, this.offset + offset)
   }
-}
-
-function normalizePosition(editor: Editor, node: Node, offset: number): Position {
-  if (!node) {
-    return editor.createPosition(editor.document, 0)
-  }
-
-  const maxOffset = getAfterOffset(node)
-
-  // 정상 범위
-  if (offset >= 0 && offset <= maxOffset) {
-    return editor.createPosition(node, offset)
-  }
-
-  const isForward = offset > maxOffset
-  
-  // 텍스트 노드에서 경계를 벗어난 경우, 다른 노드가 있는지 먼저 확인
-  if (isTextNode(node)) {
-    const traverser = isForward ? traversePreOrderGenerator : traversePreOrderBackwardGenerator
-    const hasNextNode = iter(traverser(editor.document, node, (node) => {
-      if (isAtomicComponent(node)) {
-        return false
-      }
-    }))
-      .filter((n) => isTextNode(n) || isAtomicComponent(n))
-      .filter((n) => n !== node) // 현재 노드 제외
-      .first()
-    
-    if (!hasNextNode) {
-      // 다른 노드가 없으면 경계에서 멈춤
-      return editor.createPosition(node, isForward ? maxOffset : 0)
-    }
-  }
-
-  const traverser = isForward ? traversePreOrderGenerator : traversePreOrderBackwardGenerator
-  let remains = isForward ? offset : Math.abs(offset)
-
-  const targetNode = iter(
-    traverser(editor.document, node, (node) => {
-      if (isAtomicComponent(node)) {
-        return false
-      }
-    }),
-  )
-    .filter((node) => isTextNode(node) || isAtomicComponent(node))
-    .takeWhile(() => remains > 0)
-    .tap((node) => {
-      remains -= getAfterOffset(node)
-    })
-    .last()
-
-  if (!targetNode) {
-    // 경계에서 더 이상 이동할 수 없으면 현재 위치에 머무름
-    if (isTextNode(node)) {
-      return editor.createPosition(node, isForward ? maxOffset : 0)
-    }
-    return editor.createPosition(node, maxOffset)
-  }
-
-  const finalOffset = isForward ? getAfterOffset(targetNode) + remains : Math.abs(remains)
-
-  return editor.createPosition(targetNode, finalOffset)
 }
 
 class EditorRangeRectWalker {
