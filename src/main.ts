@@ -386,6 +386,7 @@ class EditorSelection {
       this.anchor = null
       this.focus = null
     }
+    this.editor.render()
   }
 
   collapseToStart() {
@@ -394,6 +395,7 @@ class EditorSelection {
       this.focus = this.editor.createPosition(range.startContainer, range.startOffset)
       this.anchor = this.focus
     }
+    this.editor.render()
   }
 
   collapseToEnd() {
@@ -402,12 +404,14 @@ class EditorSelection {
       this.focus = this.editor.createPosition(range.endContainer, range.endOffset)
       this.anchor = this.focus
     }
+    this.editor.render()
   }
 
   collapse(offsetNode: Node, offset: number) {
     const position = normalizePosition(this.editor, offsetNode, offset)
     this.focus = this.editor.createPosition(position.node, position.offset)
     this.anchor = this.focus
+    this.editor.render()
   }
 
   extend(node: Node, offset: number) {
@@ -421,6 +425,7 @@ class EditorSelection {
 
     this.anchor = this.editor.createPosition(anchor.node, anchor.offset)
     this.focus = this.editor.createPosition(focus.node, focus.offset)
+    this.editor.render()
   }
 
   private calculateNewPosition(
@@ -842,7 +847,6 @@ export function getKeyBindingString(e: KeyboardEvent): string | null {
 
 export function main() {
   const editor = new Editor(document.querySelector('#app')!)
-  const view = new EditorView(editor)
   const mainWalker = editor.createTreeWalker()
 
   document.onkeydown = (e) => {
@@ -854,7 +858,6 @@ export function main() {
       e.preventDefault()
       const selection = editor.getSelection()
       command(selection, e)
-      view.render()
     }
   }
 
@@ -870,7 +873,6 @@ export function main() {
     } else {
       selection.collapse(caretPosition.node, caretPosition.offset)
     }
-    view.render()
 
     const onMouseMove = (moveEvent: MouseEvent) => {
       const { clientX: moveX, clientY: moveY } = moveEvent
@@ -878,7 +880,6 @@ export function main() {
       if (!movePosition) return
 
       selection.extend(movePosition.node, movePosition.offset)
-      view.render()
     }
 
     const onMouseUp = () => {
@@ -897,13 +898,10 @@ export function main() {
   range.setStart(firstNode, 0)
   const selection = editor.getSelection()
   selection.setRange(range)
-  view.render()
 
   Array(3)
     .fill(0)
     .forEach(() => {
       selection.modify('move', 'forward', 'character')
     })
-
-  view.render()
 }
