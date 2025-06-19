@@ -1,18 +1,102 @@
-import { iter } from './Iterator'
-import { calculateVerticalOverlapRatio, debugRect, findBestPosition } from './DOMRect'
-import { normalizeDocument } from './normalizeDocument'
-import { normalizePosition } from './normalizePosition'
+import { iter } from './base/Iterator'
+import { debugRect, findBestPosition } from './dom/DOMRect'
+import { EditorRangeRectWalker } from './dom/EditorRangeRectWalker'
+import { EditorTreeWalker } from './dom/EditorTreeWalker'
+import { DocumentModel } from './entities/model'
+import { findAncestorAtomic } from './dom/findAncestorAtomic'
+import { isAtomicComponent } from './dom/isAtomicComponent'
+import { isBlockElement } from './dom/isBlockElement'
+import { traversePreOrderGenerator, traversePreOrderBackwardGenerator } from './dom/traversePreOrderGenerator'
 
 export const isTextNode = (node: Node | null): node is Text => node?.nodeType === Node.TEXT_NODE
 export const isElementNode = (node: Node | null): node is Element => node?.nodeType === Node.ELEMENT_NODE
 
 export const getAfterOffset = (node: Node): number => (isTextNode(node) ? node.textContent?.length || 0 : 1)
 
-const acceptNode = (node: Node): number => {
+export const acceptNode = (node: Node): number => {
   if (isTextNode(node) || isAtomicComponent(node)) {
     return NodeFilter.FILTER_ACCEPT
   }
   return NodeFilter.FILTER_SKIP
+}
+
+/** 노드의 부모가 inline 요소인지 확인 */
+const isInlineElement = (node: Node): boolean => {
+  const parentElement = node.parentNode
+  return !!(parentElement && isElementNode(parentElement) && !isBlockElement(parentElement))
+}
+
+/** 텍스트 노드가 inline 요소 내부에 있는지 확인 */
+const isTextNodeInInlineElement = (node: Node): boolean => {
+  return isTextNode(node) && isInlineElement(node)
+}
+
+/** 지정된 방향으로 순회할 수 있는 이터레이터 생성 */
+const createTraverser = (editor: Editor, startNode: Node, direction: 'forward' | 'backward') => {
+  const traverser = direction === 'forward' ? traversePreOrderGenerator : traversePreOrderBackwardGenerator
+  return iter(traverser(editor.document, startNode, (node) => (isAtomicComponent(node) ? false : true)))
+    .filter((n) => isTextNode(n) || isAtomicComponent(n))
+    .filter((n) => n !== startNode)
+}
+
+/** 지정된 방향의 다음 노드 찾기 */
+const findNextNode = (editor: Editor, node: Node, direction: 'forward' | 'backward'): Node | null => {
+  return createTraverser(editor, node, direction).first()
+}
+
+/** 텍스트 노드 경계에서의 위치 처리 */
+const handleTextNodeBoundary = (editor: Editor, node: Node, offset: number, maxOffset: number): Position | null => {
+  if (!isTextNode(node) || offset !== maxOffset) {
+    return null // 텍스트 노드의 끝이 아니면 특별한 처리 없음
+  }
+
+  const nextNode = findNextNode(editor, node, 'forward')
+  if (!nextNode) {
+    return null // 다음 노드가 없으면 특별한 처리 없음
+  }
+
+  // 다음 노드가 인라인 atomic 컴포넌트인 경우
+  if (isAtomicComponent(nextNode) && !isBlockElement(nextNode)) {
+    const nodeId = editor.getNodeId(nextNode)
+    if (nodeId) return editor.createPosition(nodeId, 0)
+  }
+
+  // 다음 노드가 텍스트 노드인 경우
+  if (isTextNode(nextNode)) {
+    const isCurrentNodeInInline = isTextNodeInInlineElement(node)
+    const isNextNodeInInline = isTextNodeInInlineElement(nextNode)
+
+    // 일반 텍스트에서 인라인 텍스트로 넘어가는 경우 (예: text -> <strong>text</strong>)
+    if (!isCurrentNodeInInline && isNextNodeInInline) {
+      const nodeId = editor.getNodeId(nextNode)
+      if (nodeId) return editor.createPosition(nodeId, 0)
+    }
+
+    // 인라인 텍스트에서 다른 인라인 텍스트로 넘어가는 경우 (예: <strong>text1</strong><em>text2</em>)
+    if (isCurrentNodeInInline && isNextNodeInInline) {
+      const nodeId = editor.getNodeId(node)
+      if (nodeId) return editor.createPosition(nodeId, maxOffset) // 현재 노드의 끝에 머무름
+    }
+  }
+
+  return null // 위 조건들에 해당하지 않으면 특별한 처리 없음
+}
+
+/** 블록 요소 간 이동인지 확인 */
+const isMovingBetweenBlocks = (currentNode: Node, nextNode: Node): boolean => {
+  return !isTextNodeInInlineElement(currentNode) && !isTextNodeInInlineElement(nextNode) && currentNode.parentNode !== nextNode.parentNode
+}
+
+/** 새 오프셋 계산 */
+const calculateNewOffset = (currentOffset: number, maxOffset: number, currentNode: Node, nextNode: Node, isForward: boolean): number => {
+  const isBlockToBlock = isMovingBetweenBlocks(currentNode, nextNode)
+  const blockBoundaryAdjustment = isBlockToBlock ? 1 : 0
+
+  // 앞으로 이동 시: 현재 offset에서 현재 노드의 maxOffset과 블록 경계 조정을 뺀다.
+  // 뒤로 이동 시: 현재 offset에 다음 노드의 offset과 블록 경계 조정을 더한다.
+  return isForward
+    ? currentOffset - maxOffset - blockBoundaryAdjustment
+    : currentOffset + getAfterOffset(nextNode) + blockBoundaryAdjustment
 }
 
 const setRangeBoundary = (range: Range, container: Node, offset: number, boundaryType: 'start' | 'end') => {
@@ -29,175 +113,33 @@ const setRangeBoundary = (range: Range, container: Node, offset: number, boundar
   }
 }
 
-class EditorTreeWalker {
-  root: Node
-  currentNode: Node
-
-  constructor(root: Node, currentNode?: Node) {
-    this.root = root
-    this.currentNode = currentNode || root
-  }
-
-  private getNextNode(node: Node | null, direction: 'forward' | 'backward'): Node | null {
-    if (!node) return null
-
-    if (direction === 'forward') {
-      if (!isAtomicComponent(node) && node.firstChild) {
-        return node.firstChild
-      }
-      if (node.nextSibling) {
-        return node.nextSibling
-      }
-      let temp: Node | null = node
-      while (temp) {
-        if (temp === this.root) return null
-        if (temp.nextSibling) return temp.nextSibling
-        temp = temp.parentNode
-      }
-      return null
-    } else {
-      if (node === this.root) return null
-      if (node.previousSibling) {
-        let current = node.previousSibling
-        while (!isAtomicComponent(current) && current.lastChild) {
-          current = current.lastChild
-        }
-        return current
-      }
-      const parent = node.parentNode
-      if (parent === this.root) return null
-      return parent
-    }
-  }
-
-  private *traverse(direction: 'forward' | 'backward'): Generator<Node> {
-    let node: Node | null = this.currentNode
-
-    while (node) {
-      if (acceptNode(node) === NodeFilter.FILTER_ACCEPT) {
-        this.currentNode = node
-        yield node
-      }
-      node = this.getNextNode(node, direction)
-    }
-  }
-
-  *forward(): Generator<Node> {
-    yield* this.traverse('forward')
-  }
-
-  *backward(): Generator<Node> {
-    yield* this.traverse('backward')
-  }
-}
-
 export class Position {
-  constructor(public editor: Editor, public node: Node, public offset: number) {}
+  constructor(public nodeId: string, public offset: number) {}
 
-  clone(node: Node, offset: number = 0) {
-    return new Position(this.editor, node, offset)
-  }
-
-  nextCharacter(offset: number = 1) {
-    return normalizePosition(this.editor, this.node, this.offset + offset)
-  }
-}
-
-class EditorRangeRectWalker {
-  editor: Editor
-
-  constructor(editor: Editor) {
-    this.editor = editor
-  }
-
-  /**
-   * 지정된 방향으로 Rect를 순회하며, 각 Rect에 대한 상대적 줄 번호를 함께 반환합니다.
-   * @param startNode 순회를 시작할 노드
-   * @param startOffset 시작 노드 내의 오프셋
-   * @param direction 순회 방향 ('forward' 또는 'backward')
-   */
-  *walk(
-    startNode: Node,
-    startOffset: number = 0,
-    direction: 'forward' | 'backward',
-  ): Generator<{ node: Node; rect: DOMRect; lineOffset: number; lineBoundary: boolean }> {
-    let lineOffset = 0
-    let lineAnchorRect: DOMRect | null = null
-    let lineBoundary = true
-    const lineOffsetIncrement = direction === 'forward' ? 1 : -1
-
-    const processNode = function* (node: Node, rects: DOMRect[]) {
-      for (const rect of rects) {
-        if (!lineAnchorRect) {
-          lineAnchorRect = rect
-        } else if (calculateVerticalOverlapRatio(lineAnchorRect, rect) < 0.5) {
-          lineBoundary = false
-          if (direction === 'forward' && lineAnchorRect.bottom > rect.bottom) {
-            continue
-          } else if (direction === 'backward' && lineAnchorRect.top < rect.top) {
-            continue
-          }
-          lineOffset += lineOffsetIncrement
-          lineAnchorRect = rect
-        }
-
-        yield { node, rect, lineOffset, lineBoundary }
-      }
-    }
-
-    const iteratorWalker = this.editor.createTreeWalker()
-    iteratorWalker.currentNode = startNode
-    const iterator = direction === 'forward' ? iteratorWalker.forward() : iteratorWalker.backward()
-
-    const range = this.editor.createRange()
-
-    // Handle startNode with offset
-    const firstNode = iterator.next().value
-    const reversed = direction === 'backward'
-
-    if (firstNode) {
-      console.log('firstNode', firstNode, direction)
-
-      if (direction === 'forward') {
-        range.setStart(firstNode, startOffset)
-        yield* processNode(firstNode, range.getClientRects().slice(0, 1))
-        range.setEndAfter(firstNode)
-      } else {
-        range.setEnd(firstNode, startOffset)
-        yield* processNode(firstNode, range.getClientRects().slice(0, 1))
-        range.setStartBefore(firstNode)
-      }
-      yield* processNode(firstNode, range.getClientRects(reversed))
-    }
-
-    for (const nextNode of iterator) {
-      range.selectNode(nextNode)
-      const rects = Array.from(range.getClientRects(direction === 'backward'))
-      yield* processNode(nextNode, rects)
-    }
+  clone(nodeId: string, offset: number = 0) {
+    return new Position(nodeId, offset)
   }
 }
 
 //
 // EditorRange
 //
-class EditorRange {
+export class EditorRange {
   editor: Editor
 
-  private _range: Range | null = null
   private _start: Position | null = null
   private _end: Position | null = null
 
-  get startContainer() {
-    return this._start?.node || null
+  get startContainerId() {
+    return this._start?.nodeId || null
   }
 
   get startOffset() {
     return this._start?.offset || 0
   }
 
-  get endContainer() {
-    return this._end?.node || null
+  get endContainerId() {
+    return this._end?.nodeId || null
   }
 
   get endOffset() {
@@ -213,15 +155,15 @@ class EditorRange {
   }
 
   get isCollapsed() {
-    return this._start?.node === this._end?.node && this._start?.offset === this._end?.offset
+    return this._start?.nodeId === this._end?.nodeId && this._start?.offset === this._end?.offset
   }
 
   constructor(editor: Editor) {
     this.editor = editor
   }
 
-  private setBoundary(node: Node, offset: number, boundaryType: 'start' | 'end') {
-    const position = normalizePosition(this.editor, node, offset)
+  private setBoundary(nodeId: string, offset: number, boundaryType: 'start' | 'end') {
+    const position = new Position(nodeId, offset)
     if (boundaryType === 'start') {
       this._start = position
 
@@ -235,109 +177,63 @@ class EditorRange {
         this._start = position
       }
     }
-
-    this._range = null
   }
 
-  private setBoundaryRelative(node: Node, boundaryType: 'start' | 'end', position: 'before' | 'after') {
-    const offset = position === 'before' ? 0 : getAfterOffset(node)
-    this.setBoundary(node, offset, boundaryType)
+  setStart(nodeId: string, offset: number) {
+    this.setBoundary(nodeId, offset, 'start')
   }
 
-  setStart(node: Node, offset: number) {
-    this.setBoundary(node, offset, 'start')
+  setEnd(nodeId: string, offset: number) {
+    this.setBoundary(nodeId, offset, 'end')
   }
 
-  setEnd(node: Node, offset: number) {
-    this.setBoundary(node, offset, 'end')
+  selectNode(nodeId: string) {
+    const node = this.editor.getNodeById(nodeId)
+    if (!node) return
+    const modelNode = this.editor.model[nodeId]
+    if (!modelNode) return
+
+    this.setStart(nodeId, 0)
+    const endOffset = isTextNode(node) ? node.textContent?.length ?? 0 : 1
+    this.setEnd(nodeId, endOffset)
   }
 
-  setStartAfter(node: Node) {
-    this.setBoundaryRelative(node, 'start', 'after')
-  }
-
-  setStartBefore(node: Node) {
-    this.setBoundaryRelative(node, 'start', 'before')
-  }
-
-  setEndAfter(node: Node) {
-    this.setBoundaryRelative(node, 'end', 'after')
-  }
-
-  setEndBefore(node: Node) {
-    this.setBoundaryRelative(node, 'end', 'before')
-  }
-
-  collapse(toStart: boolean) {
-    if (toStart) {
-      if (this._start) {
-        this._end = this._start
-      }
-    } else {
-      if (this._end) {
-        this._start = this._end
-      }
-    }
-    this._range = null
-  }
-
-  //
-  selectNode(node: Node) {
-    this.setStartBefore(node)
-    this.setEndAfter(node)
-  }
-
-  toRange() {
-    if (this._range) {
-      return this._range
+  toRange(): Range | null {
+    if (!this._start || !this._end) {
+      return null
     }
 
-    const range = document.createRange()
+    const startNode = this.editor.getNodeById(this._start.nodeId)
+    const endNode = this.editor.getNodeById(this._end.nodeId)
 
-    if (this._start && this._end) {
-      setRangeBoundary(range, this._start.node, this._start.offset, 'start')
-      setRangeBoundary(range, this._end.node, this._end.offset, 'end')
+    if (!startNode || !endNode) {
+      return null
     }
 
-    this._range = range
+    const range = this.editor.document.ownerDocument.createRange()
+    setRangeBoundary(range, startNode, this._start.offset, 'start')
+    setRangeBoundary(range, endNode, this._end.offset, 'end')
+
     return range
   }
 
   getClientRects(reversed: boolean = false) {
-    if (this._start && this._end && this._start.node === this._end.node && isElementNode(this._start.node)) {
-      const rect = this._start.node.getBoundingClientRect()
-      const minHeight = 20
-      const actualHeight = Math.max(rect.height, minHeight)
-      const topAdjustment = (actualHeight - rect.height) / 2
-
-      if (this._start.offset === 0) {
-        return [new DOMRect(rect.left, rect.top - topAdjustment, 0, actualHeight)]
-      } else {
-        return [new DOMRect(rect.right, rect.top - topAdjustment, 0, actualHeight)]
-      }
-    }
-
-    const rects = Array.from(this.toRange().getClientRects())
-    if (reversed) {
-      return rects.reverse()
-    }
-
-    // debugRect(rects)
-    return rects
+    const range = this.toRange()
+    return range ? Array.from(range.getClientRects()) : []
   }
 
   getBoundingClientRect() {
-    return this.toRange().getBoundingClientRect()
+    const range = this.toRange()
+    return range ? range.getBoundingClientRect() : new DOMRect()
   }
 
-  //
   deleteContents() {
-    const range = this.toRange()
-    range.deleteContents()
+    // TODO: 모델에서 내용을 삭제하도록 구현해야 합니다.
+    console.warn('EditorRange.deleteContents is not implemented for the model yet.')
   }
 }
 
-class EditorSelection {
+export class EditorSelection {
   editor: Editor
   anchor: Position | null = null
   focus: Position | null = null
@@ -348,83 +244,77 @@ class EditorSelection {
   }
 
   get isCollapsed() {
-    return this.anchor && this.focus && this.anchor.node === this.focus.node && this.anchor.offset === this.focus.offset
+    return !!(this.anchor && this.focus && this.anchor.nodeId === this.focus.nodeId && this.anchor.offset === this.focus.offset)
   }
 
   get range(): EditorRange {
-    const range = this.editor.createRange()
+    const range = new EditorRange(this.editor)
     if (!this.anchor || !this.focus) {
       return range
     }
 
     const { anchor: anchorPosition, focus: focusPosition } = this
 
-    const pos = anchorPosition.node.compareDocumentPosition(focusPosition.node)
-    const isFocusBeforeAnchor =
-      pos & Node.DOCUMENT_POSITION_FOLLOWING
-        ? false
-        : pos & Node.DOCUMENT_POSITION_PRECEDING
-        ? true
-        : focusPosition.offset < anchorPosition.offset
+    const anchorNode = this.editor.getNodeById(anchorPosition.nodeId)
+    const focusNode = this.editor.getNodeById(focusPosition.nodeId)
+
+    if (!anchorNode || !focusNode) {
+      return range
+    }
+
+    let isFocusBeforeAnchor = false
+    if (anchorNode === focusNode) {
+      isFocusBeforeAnchor = focusPosition.offset < anchorPosition.offset
+    } else {
+      const pos = anchorNode.compareDocumentPosition(focusNode)
+      isFocusBeforeAnchor = !!(pos & Node.DOCUMENT_POSITION_PRECEDING)
+    }
 
     if (isFocusBeforeAnchor) {
-      range.setStart(focusPosition.node, focusPosition.offset)
-      range.setEnd(anchorPosition.node, anchorPosition.offset)
+      range.setStart(focusPosition.nodeId, focusPosition.offset)
+      range.setEnd(anchorPosition.nodeId, anchorPosition.offset)
     } else {
-      range.setStart(anchorPosition.node, anchorPosition.offset)
-      range.setEnd(focusPosition.node, focusPosition.offset)
+      range.setStart(anchorPosition.nodeId, anchorPosition.offset)
+      range.setEnd(focusPosition.nodeId, focusPosition.offset)
     }
 
     return range
   }
 
   setRange(range: EditorRange) {
-    if (range.startContainer) {
-      this.anchor = this.editor.createPosition(range.startContainer, range.startOffset)
-      this.focus = this.editor.createPosition(range.endContainer || range.startContainer, range.endOffset)
-    } else {
-      this.anchor = null
-      this.focus = null
-    }
-    this.editor.render()
+    this.anchor = range.start
+    this.focus = range.end
   }
 
   collapseToStart() {
-    const range = this.range
-    if (range.startContainer) {
-      this.focus = this.editor.createPosition(range.startContainer, range.startOffset)
-      this.anchor = this.focus
-    }
+    if (!this.range.start) return
+    this.focus = this.anchor = this.range.start
     this.editor.render()
   }
 
   collapseToEnd() {
-    const range = this.range
-    if (range.endContainer) {
-      this.focus = this.editor.createPosition(range.endContainer, range.endOffset)
-      this.anchor = this.focus
-    }
+    if (!this.range.end) return
+    this.focus = this.anchor = this.range.end
     this.editor.render()
   }
 
-  collapse(offsetNode: Node, offset: number) {
-    const position = normalizePosition(this.editor, offsetNode, offset)
-    this.focus = this.editor.createPosition(position.node, position.offset)
+  collapse(nodeId: string, offset: number) {
+    this.focus = new Position(nodeId, offset)
     this.anchor = this.focus
     this.editor.render()
   }
 
-  extend(node: Node, offset: number) {
-    const focus = normalizePosition(this.editor, node, offset)
-    this.setBaseAndExtent(this.anchor!.node, this.anchor!.offset, focus.node, focus.offset)
+  extend(nodeId: string, offset: number) {
+    if (!this.anchor) {
+      this.collapse(nodeId, offset)
+      return
+    }
+    this.setBaseAndExtent(this.anchor.nodeId, this.anchor.offset, nodeId, offset)
   }
 
-  setBaseAndExtent(anchorNode: Node, anchorOffset: number, focusNode: Node, focusOffset: number) {
-    const anchor = normalizePosition(this.editor, anchorNode, anchorOffset)
-    const focus = normalizePosition(this.editor, focusNode, focusOffset)
-
-    this.anchor = this.editor.createPosition(anchor.node, anchor.offset)
-    this.focus = this.editor.createPosition(focus.node, focus.offset)
+  setBaseAndExtent(anchorNodeId: string, anchorOffset: number, focusNodeId: string, focusOffset: number) {
+    this.anchor = new Position(anchorNodeId, anchorOffset)
+    this.focus = new Position(focusNodeId, focusOffset)
     this.editor.render()
   }
 
@@ -432,65 +322,63 @@ class EditorSelection {
     direction: 'forward' | 'backward',
     granularity: 'character' | 'word' | 'line' | 'paragraph' | 'sentence' | 'lineboundary',
   ): Position | null {
-    if (!this.focus) return null
+    if (!this.focus) {
+      return null
+    }
+    const focusNode = this.editor.getNodeById(this.focus.nodeId)
+    if (!focusNode) return null
 
     if (granularity === 'character') {
-      return this.focus.nextCharacter(direction === 'forward' ? 1 : -1)
+      const newPosition = this.editor.normalizePosition(this.focus.nodeId, this.focus.offset + (direction === 'forward' ? 1 : -1))
+      return newPosition
     }
 
-    // lineboundary
-
     // @FIXME:
-    if (granularity === 'lineboundary' && isAtomicComponent(this.focus.node)) {
+    if (granularity === 'lineboundary' && isAtomicComponent(focusNode)) {
       if (direction === 'forward' && this.focus.offset === 0) {
-        return this.editor.createPosition(this.focus.node, 1)
+        return this.editor.createPosition(this.focus.nodeId, 1)
       }
       if (direction === 'backward' && this.focus.offset === 1) {
-        return this.editor.createPosition(this.focus.node, 0)
+        return this.editor.createPosition(this.focus.nodeId, 0)
       }
     }
 
     if (granularity === 'lineboundary') {
       const rectWalker = this.editor.createRangeRectWalker()
-      const targetPosition = iter(rectWalker.walk(this.focus.node, this.focus.offset, direction))
+      const targetPosition = iter(rectWalker.walk(focusNode, this.focus.offset, direction))
         .takeWhile((pos) => pos.lineBoundary)
         .last()
 
-      if (!targetPosition) return null
-
-      const targetRect = targetPosition.rect
-      const x = direction === 'forward' ? targetRect.right : targetRect.left
-      const y = targetRect.top
-
-      const r = this.editor.getPositionFromPoint(x, y)
-
-      console.log('r', r)
-
-      debugRect([targetPosition.rect])
-
-      return r
+      if (targetPosition) {
+        const targetNodeId = this.editor.getNodeId(targetPosition.node)
+        if (targetNodeId) {
+          const pos = findBestPosition([targetPosition], 0)
+          if (pos) {
+            return this.editor.createPosition(targetNodeId, pos.offset)
+          }
+        }
+      }
+      return null
     }
 
     if (granularity === 'line') {
-      const cursorRects = this.range.getClientRects()
-      if (cursorRects.length === 0 && this.goalX === null) return null
-
-      if (this.goalX === null) {
-        this.goalX = cursorRects[0].left
-      }
-
+      const currentGoalX = this.goalX
       const rectWalker = this.editor.createRangeRectWalker()
-      const targetLinePositions = iter(rectWalker.walk(this.focus.node, this.focus.offset, direction))
+      const targetLinePositions = iter(rectWalker.walk(focusNode, this.focus.offset, direction))
         .skipWhile((pos) => pos.lineOffset === 0)
         .takeWhile((pos) => Math.abs(pos.lineOffset) === 1)
         .toArray()
 
-      if (targetLinePositions.length === 0) return null
-
-      const bestPos = findBestPosition(targetLinePositions, this.goalX!)
-      if (!bestPos) return null
-
-      return this.editor.getPositionFromPoint(this.goalX, bestPos.rect.top)
+      if (targetLinePositions.length > 0) {
+        const bestPosition = findBestPosition(targetLinePositions, currentGoalX || 0)
+        if (bestPosition) {
+          const targetNodeId = this.editor.getNodeId(bestPosition.node)
+          if (targetNodeId) {
+            return this.editor.createPosition(targetNodeId, bestPosition.offset)
+          }
+        }
+      }
+      return null
     }
 
     return null
@@ -501,80 +389,99 @@ class EditorSelection {
     direction: 'forward' | 'backward',
     granularity: 'character' | 'word' | 'line' | 'paragraph' | 'sentence' | 'lineboundary',
   ) {
-    if (!this.focus) return
-
-    if (granularity !== 'line') {
-      this.goalX = null
-    }
-
-    let newFocusPosition = this.calculateNewPosition(direction, granularity)
+    const newFocusPosition = this.calculateNewPosition(direction, granularity)
     if (!newFocusPosition) return
 
     if (type === 'move') {
-      this.collapse(newFocusPosition.node, newFocusPosition.offset)
+      this.collapse(newFocusPosition.nodeId, newFocusPosition.offset)
     } else {
-      this.extend(newFocusPosition.node, newFocusPosition.offset)
+      this.extend(newFocusPosition.nodeId, newFocusPosition.offset)
     }
 
-    if (granularity === 'character' && this.focus.node.nodeName === 'BR') {
+    const focusNode = this.editor.getNodeById(this.focus!.nodeId)
+    if (focusNode && granularity === 'character' && focusNode.nodeName === 'BR') {
       this.modify('move', direction, 'character')
       return
     }
+
+    this.goalX = null
   }
 
   deleteFromDocument() {
-    this.range.deleteContents()
-    this.collapseToStart()
+    // TODO: Implement model deletion
   }
-}
-
-// ------------------------------------------------------------
-// Atomic Component Utilities
-// ------------------------------------------------------------
-
-export const isAtomicComponent = (node: Node) => {
-  if (isElementNode(node)) {
-    if (node.tagName === 'BR' || node.tagName === 'HR' || node.tagName === 'IMG' || node.tagName === 'TABLE') {
-      return true
-    }
-
-    if ((node as HTMLElement).classList.contains('atomic-component')) {
-      return true
-    }
-
-    return false
-  }
-
-  return false
-}
-
-export const isBlockElement = (node: Node): boolean => {
-  if (isElementNode(node)) {
-    const computedStyle = window.getComputedStyle(node)
-    const display = computedStyle.display
-    // display 값에 inline이 포함되지 않으면 블록 요소로 간주
-    return !display.includes('inline')
-  }
-  return false
-}
-
-const findAncestorAtomic = (node: Node, root: Node): Element | null => {
-  let current: Node | null = node
-  while (current && current !== root) {
-    if (isAtomicComponent(current)) return current as Element
-    current = current.parentNode
-  }
-  return null
 }
 
 export class Editor {
+  model: DocumentModel
   document: HTMLElement
-  #selection: EditorSelection | null = null
+  private _selection: EditorSelection
   view: EditorView
 
-  constructor(doc: HTMLElement) {
-    this.document = normalizeDocument(doc)
+  constructor(doc: HTMLElement, initialModel: DocumentModel) {
+    this.document = doc
+    this.model = initialModel
+    this._selection = new EditorSelection(this)
     this.view = new EditorView(this)
+    this.render()
+  }
+
+  getNodeById(nodeId: string): Node | null {
+    const element = this.document.querySelector<HTMLElement>(`[data-node-id="${nodeId}"]`)
+    if (!element) return null
+
+    if (element.getAttribute('data-node-type') === 'text') {
+      return element.firstChild
+    }
+    return element
+  }
+
+  getNodeId(node: Node): string | null {
+    const element = isTextNode(node) ? node.parentElement : (node as Element)
+    return element?.getAttribute('data-node-id') || null
+  }
+
+  normalizePosition(nodeId: string, offset: number): Position {
+    const node = this.getNodeById(nodeId)
+    if (!node) {
+      const modelNode = this.model[nodeId]
+      if (!modelNode) return new Position(nodeId, offset)
+      return new Position(nodeId, offset)
+    }
+
+    let currentNode = node
+    let currentOffset = offset
+
+    while (true) {
+      const maxOffset = getAfterOffset(currentNode)
+
+      if (currentOffset >= 0 && currentOffset <= maxOffset) {
+        const boundaryPosition = handleTextNodeBoundary(this, currentNode, currentOffset, maxOffset)
+        if (boundaryPosition) {
+          return boundaryPosition
+        }
+        const currentId = this.getNodeId(currentNode)
+        if (currentId) {
+          return this.createPosition(currentId, currentOffset)
+        }
+        return new Position(nodeId, offset)
+      }
+
+      const isForward = currentOffset > maxOffset
+      const direction = isForward ? 'forward' : 'backward'
+      const nextNode = findNextNode(this, currentNode, direction)
+
+      if (!nextNode) {
+        const currentId = this.getNodeId(currentNode)
+        if (currentId) {
+          return this.createPosition(currentId, isForward ? maxOffset : 0)
+        }
+        return new Position(nodeId, isForward ? maxOffset : 0)
+      }
+
+      currentOffset = calculateNewOffset(currentOffset, maxOffset, currentNode, nextNode, isForward)
+      currentNode = nextNode
+    }
   }
 
   createTreeWalker() {
@@ -585,60 +492,61 @@ export class Editor {
     return new EditorRangeRectWalker(this)
   }
 
-  createPosition(node: Node, offset: number = 0) {
-    return new Position(this, node, offset)
-  }
-
-  createRange() {
-    return new EditorRange(this)
+  createPosition(nodeId: string, offset: number = 0) {
+    return new Position(nodeId, offset)
   }
 
   getSelection() {
-    if (this.#selection) {
-      return this.#selection
-    }
-
-    this.#selection = new EditorSelection(this)
-    return this.#selection
+    return this._selection
   }
 
   render() {
-    this.view.render()
+    this.view.renderSelection()
+  }
+
+  renderDocument() {
+    this.view.renderDocument()
   }
 
   getPositionFromPoint(x: number, y: number): Position | null {
     const position = this.document.ownerDocument.caretPositionFromPoint(x, y)
-    if (!position) return null
-
-    const atomicAncestor = findAncestorAtomic(position.offsetNode, this.document)
-    if (atomicAncestor) {
-      const rect = atomicAncestor.getBoundingClientRect()
-      return this.createPosition(atomicAncestor, x < rect.left + rect.width / 2 ? 0 : 1)
+    if (position) {
+      const atomicAncestor = findAncestorAtomic(position.offsetNode, this.document)
+      if (atomicAncestor) {
+        const rect = atomicAncestor.getBoundingClientRect()
+        const nodeId = this.getNodeId(atomicAncestor)
+        if (nodeId) return this.createPosition(nodeId, x < rect.left + rect.width / 2 ? 0 : 1)
+      }
     }
 
-    if (isElementNode(position.offsetNode)) {
-      const childNode = position.offsetNode.childNodes[position.offset]
+    const elements = this.document.ownerDocument.elementsFromPoint(x, y) as Element[]
+    const leaf = iter(elements).find((el) => {
+      return !!(el.closest('#editor') && el.getAttribute('data-node-id'))
+    })
 
-      // Not atomic. Find first leaf.
-      const leafWalker = this.createTreeWalker()
-      leafWalker.currentNode = childNode
-      const leaf = leafWalker.forward().next().value || childNode // Fallback to childNode itself
+    if (leaf) {
+      const nodeId = this.getNodeId(leaf)
+      if (nodeId) {
+        if (isAtomicComponent(leaf)) {
+          const rect = leaf.getBoundingClientRect()
+          return this.createPosition(nodeId, x < rect.left + rect.width / 2 ? 0 : 1)
+        }
 
-      if (isAtomicComponent(leaf)) {
-        const rect = (leaf as Element).getBoundingClientRect()
-        return this.createPosition(leaf, x < rect.left + rect.width / 2 ? 0 : 1)
+        const precisePosition = this.document.ownerDocument.caretPositionFromPoint(x, y)
+        if (precisePosition) {
+          const preciseNodeId = this.getNodeId(precisePosition.offsetNode)
+          if (preciseNodeId) return this.createPosition(preciseNodeId, precisePosition.offset)
+        }
+
+        return this.createPosition(nodeId, 0)
       }
-
-      const precisePosition = this.document.ownerDocument.caretPositionFromPoint(x, y)
-      if (precisePosition) {
-        return this.createPosition(precisePosition.offsetNode, precisePosition.offset)
-      }
-
-      // Fallback to the beginning of the leaf if the precise call fails.
-      return this.createPosition(leaf, 0)
     }
 
-    return this.createPosition(position.offsetNode, position.offset)
+    if (position) {
+      const nodeId = this.getNodeId(position.offsetNode)
+      if (nodeId) return this.createPosition(nodeId, position.offset)
+    }
+    return null
   }
 }
 
@@ -686,6 +594,8 @@ class EditorView {
       zIndex: '10000',
     })
     document.body.appendChild(this.#inspectorElement)
+
+    this.document.addEventListener('compositionend', this.onCompositionEnd.bind(this))
   }
 
   private createSelectionElement(rect: DOMRect, editorRect: DOMRect): HTMLDivElement {
@@ -702,206 +612,138 @@ class EditorView {
   }
 
   private updateCursorPosition(rect: DOMRect, editorRect: DOMRect) {
-    Object.assign(this.#cursorElement.style, {
-      top: rect.top - editorRect.top + 'px',
-      left: rect.left - editorRect.left + 'px',
-      height: rect.height + 'px',
-      display: 'block',
-    })
-
-    this.#cursorElement.scrollIntoView({
-      behavior: 'instant',
-      block: 'nearest',
-      inline: 'nearest',
-    })
+    this.#cursorElement.style.left = `${rect.left - editorRect.left}px`
+    this.#cursorElement.style.top = `${rect.top - editorRect.top}px`
+    this.#cursorElement.style.height = `${rect.height}px`
   }
 
-  render() {
+  renderSelection() {
+    const selection = this.editor.getSelection()
+    const editorRect = this.document.getBoundingClientRect()
+
     this.#selectionElements.forEach((el) => el.remove())
     this.#selectionElements = []
     this.#cursorElement.style.display = 'none'
 
-    const selection = this.editor.getSelection()
     const range = selection.range
     if (!range) return
 
-    const rects = range.getClientRects()
-    const editorRect = this.document.getBoundingClientRect()
+    const rects = range.getClientRects() as DOMRect[]
 
     if (rects.length > 0) {
       if (range.isCollapsed) {
         this.updateCursorPosition(rects[0], editorRect)
+        this.#cursorElement.style.display = 'block'
       } else {
         rects.forEach((rect) => this.createSelectionElement(rect, editorRect))
       }
     }
 
     const { anchor, focus } = selection
-    const formatNode = (node: Node | null) => {
-      if (!node) return 'null'
-      if (isTextNode(node)) {
-        return `#text "${node.textContent?.substring(0, 20).replace(/\n/g, '\\n') ?? ''}..."`
+    const formatNode = (nodeId: string | null): string => {
+      if (!nodeId) return 'null'
+      const node = this.editor.getNodeById(nodeId)
+      if (!node) return `${nodeId}(not in DOM)`
+      const modelNode = this.editor.model[nodeId]
+      if (modelNode && modelNode.type === 'text') {
+        return `"${modelNode.text}"`
       }
       if (isElementNode(node)) {
-        return `<${node.nodeName.toLowerCase()}>`
+        return `&lt;${node.tagName.toLowerCase()}&gt;`
       }
-      return node.nodeName
+      return 'unknown'
     }
 
     this.#inspectorElement.innerHTML = `
       <pre style="margin: 0;">
 isCollapsed: ${selection.isCollapsed}
-Anchor: ${formatNode(anchor?.node ?? null)} [${anchor?.offset}]
-Focus:  ${formatNode(focus?.node ?? null)} [${focus?.offset}]
+Anchor: ${formatNode(anchor?.nodeId ?? null)} [${anchor?.offset}]
+Focus:  ${formatNode(focus?.nodeId ?? null)} [${focus?.offset}]
       </pre>
     `.trim()
   }
-}
 
-type KeyBindingCommand = (selection: EditorSelection, event: KeyboardEvent) => void
+  renderDocument() {
+    const model = this.editor.model
+    const rootNodeInfo = Object.values(model).find((n) => n.type === 'root')
+    if (!rootNodeInfo) return
 
-export const keyBindings: Record<string, KeyBindingCommand> = {
-  'Meta+ArrowRight': (selection) => {
-    selection.modify('move', 'forward', 'lineboundary')
-  },
-  'Meta+Shift+ArrowRight': (selection) => {
-    selection.modify('extend', 'forward', 'lineboundary')
-  },
-  'Meta+ArrowLeft': (selection) => {
-    selection.modify('move', 'backward', 'lineboundary')
-  },
-  'Meta+Shift+ArrowLeft': (selection) => {
-    selection.modify('extend', 'backward', 'lineboundary')
-  },
-  'ArrowDown': (selection) => {
-    selection.modify('move', 'forward', 'line')
-  },
-  'Shift+ArrowDown': (selection) => {
-    selection.modify('extend', 'forward', 'line')
-  },
-  'ArrowUp': (selection) => {
-    selection.modify('move', 'backward', 'line')
-  },
-  'Shift+ArrowUp': (selection) => {
-    selection.modify('extend', 'backward', 'line')
-  },
-  'ArrowRight': (selection) => {
-    if (!selection.isCollapsed) {
-      return selection.collapseToEnd()
-    }
-    selection.modify('move', 'forward', 'character')
-  },
-  'Shift+ArrowRight': (selection) => {
-    selection.modify('extend', 'forward', 'character')
-  },
-  'ArrowLeft': (selection) => {
-    if (!selection.isCollapsed) {
-      return selection.collapseToStart()
-    }
-    selection.modify('move', 'backward', 'character')
-  },
-  'Shift+ArrowLeft': (selection) => {
-    selection.modify('extend', 'backward', 'character')
-  },
-  'Backspace': (selection) => {
-    if (!selection.isCollapsed) {
-      selection.deleteFromDocument()
-      return
+    // Clear existing content
+    while (this.document.firstChild) {
+      this.document.removeChild(this.document.firstChild)
     }
 
-    // Default behavior: delete a single character backward.
-    selection.modify('extend', 'backward', 'character')
-    selection.deleteFromDocument()
-  },
-  'Delete': (selection) => {
-    if (selection.isCollapsed) {
-      selection.modify('extend', 'forward', 'character')
+    const buildDOM = (nodeId: string): Node => {
+      const nodeInfo = model[nodeId]
+      if (!nodeInfo) {
+        return document.createComment('invalid node id')
+      }
+
+      switch (nodeInfo.type) {
+        case 'text': {
+          let node: Node = document.createTextNode(nodeInfo.text || '')
+          if (nodeInfo.attributes) {
+            // 속성을 기반으로 텍스트 노드를 감싸는 엘리먼트를 생성합니다.
+            let wrapper: HTMLElement | null = null
+            if (nodeInfo.attributes.bold) {
+              wrapper = document.createElement('b')
+              wrapper.appendChild(node)
+            }
+            if (nodeInfo.attributes.italic) {
+              const newWrapper = document.createElement('i')
+              newWrapper.appendChild(wrapper || node)
+              wrapper = newWrapper
+            }
+            // ... 다른 속성들에 대한 처리 추가
+            if (wrapper) {
+              node = wrapper
+            }
+          }
+          // 실제 텍스트 노드를 감싸는 span을 만들고 data-node-id를 부여합니다.
+          const textWrapper = document.createElement('span')
+          textWrapper.setAttribute('data-node-id', nodeId)
+          textWrapper.setAttribute('data-node-type', 'text')
+          textWrapper.appendChild(node)
+          return textWrapper
+        }
+        case 'element':
+        case 'root': {
+          const tag = nodeInfo.type === 'root' ? 'div' : nodeInfo.tag
+          const element = document.createElement(tag || 'div')
+          element.setAttribute('data-node-id', nodeId)
+          if (nodeInfo.children) {
+            nodeInfo.children.forEach((childId) => {
+              element.appendChild(buildDOM(childId))
+            })
+          }
+          return element
+        }
+        case 'atomic': {
+          const element = document.createElement(nodeInfo.tag || 'span')
+          element.setAttribute('data-node-id', nodeId)
+          // Atomic 컴포넌트는 자식을 렌더링하지 않습니다.
+          return element
+        }
+        default:
+          return document.createComment('unknown node type')
+      }
     }
-    selection.deleteFromDocument()
-  },
-  '`': (selection) => {
-    console.log('selection', selection)
-  },
-}
 
-export function getKeyBindingString(e: KeyboardEvent): string | null {
-  const parts: string[] = []
+    const newContentRoot = buildDOM(rootNodeInfo.id)
+    if (newContentRoot.nodeType === Node.ELEMENT_NODE) {
+      Array.from(newContentRoot.childNodes).forEach((child) => {
+        this.document.appendChild(child)
+      })
+    }
 
-  // 일관된 순서로 수식어를 추가합니다.
-  if (e.metaKey) parts.push('Meta')
-  if (e.ctrlKey) parts.push('Ctrl')
-  if (e.altKey) parts.push('Alt')
-  if (e.shiftKey) parts.push('Shift')
+    // Re-append cursor and inspector elements as they are removed by the clearing logic
+    this.document.appendChild(this.#cursorElement)
+    document.body.appendChild(this.#inspectorElement)
 
-  const key = e.key
-
-  // 수식어만 눌린 경우는 바인딩을 생성하지 않습니다.
-  if (['Meta', 'Control', 'Alt', 'Shift', 'CapsLock', 'NumLock', 'ScrollLock'].includes(key)) {
-    return null
+    this.renderSelection()
   }
 
-  parts.push(key)
-
-  return parts.join('+')
-}
-
-export function main() {
-  const editor = new Editor(document.querySelector('#app')!)
-  const mainWalker = editor.createTreeWalker()
-
-  document.onkeydown = (e) => {
-    const keyString = getKeyBindingString(e)
-    if (!keyString) return
-
-    const command = keyBindings[keyString]
-    if (command) {
-      e.preventDefault()
-      const selection = editor.getSelection()
-      command(selection, e)
-    }
+  private onCompositionEnd(event: CompositionEvent) {
+    // Handle composition end event
   }
-
-  document.onmousedown = (e) => {
-    e.preventDefault()
-    const { clientX, clientY } = e
-    const caretPosition = editor.getPositionFromPoint(clientX, clientY)
-    if (!caretPosition) return
-
-    const selection = editor.getSelection()
-    if (e.shiftKey) {
-      selection.extend(caretPosition.node, caretPosition.offset)
-    } else {
-      selection.collapse(caretPosition.node, caretPosition.offset)
-    }
-
-    const onMouseMove = (moveEvent: MouseEvent) => {
-      const { clientX: moveX, clientY: moveY } = moveEvent
-      const movePosition = editor.getPositionFromPoint(moveX, moveY)
-      if (!movePosition) return
-
-      selection.extend(movePosition.node, movePosition.offset)
-    }
-
-    const onMouseUp = () => {
-      document.removeEventListener('mousemove', onMouseMove)
-      document.removeEventListener('mouseup', onMouseUp)
-    }
-
-    document.addEventListener('mousemove', onMouseMove)
-    document.addEventListener('mouseup', onMouseUp)
-  }
-
-  // test
-  const firstNode = mainWalker.forward().next().value
-
-  const range = editor.createRange()
-  range.setStart(firstNode, 0)
-  const selection = editor.getSelection()
-  selection.setRange(range)
-
-  Array(3)
-    .fill(0)
-    .forEach(() => {
-      selection.modify('move', 'forward', 'character')
-    })
 }

@@ -1,5 +1,3 @@
-import type { Position } from './main'
-
 export function* traversePreOrderGenerator(
   root: Element,
   startNode: Node,
