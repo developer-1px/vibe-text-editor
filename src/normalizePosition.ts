@@ -76,16 +76,19 @@ export function normalizePosition(editor: Editor, node: Node, offset: number): P
       return editor.createPosition(currentNode, isForward ? maxOffset : 0)
     }
 
-    if (isForward) {
-      const isBlockToBlock =
-        !isTextNodeInInlineElement(currentNode) && !isTextNodeInInlineElement(nextNode) && currentNode.parentNode !== nextNode.parentNode
+    const isBlockToBlock =
+      !isTextNodeInInlineElement(currentNode) && !isTextNodeInInlineElement(nextNode) && currentNode.parentNode !== nextNode.parentNode
 
+    if (isForward) {
       currentOffset -= maxOffset
       if (isBlockToBlock) {
         currentOffset -= 1
       }
     } else {
       currentOffset += getAfterOffset(nextNode)
+      if (isBlockToBlock) {
+        currentOffset += 1
+      }
     }
     currentNode = nextNode
   }

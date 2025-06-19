@@ -118,4 +118,17 @@ describe('Character movement', () => {
     expect(selection.focus?.node).toBe(emText)
     expect(selection.focus?.offset).toBe(1)
   })
+
+  it('should move backward from start of a block to end of previous block', () => {
+    const editor = setupEditor(`<p>First</p><p>Second</p>`)
+    const firstText = editor.document.querySelector('p:first-child')!.firstChild! // "First"
+    const secondText = editor.document.querySelector('p:last-child')!.firstChild! // "Second"
+    const selection = editor.getSelection()
+
+    selection.collapse(secondText, 0) // start of "Second"
+    selection.modify('move', 'backward', 'character')
+
+    expect(selection.focus?.node).toBe(firstText)
+    expect(selection.focus?.offset).toBe(5) // end of "First"
+  })
 })

@@ -331,10 +331,9 @@ class EditorRange {
   }
 
   //
-  deleteContents(): Position {
+  deleteContents() {
     const range = this.toRange()
     range.deleteContents()
-    return this.editor.createPosition(range.startContainer, range.startOffset)
   }
 }
 
@@ -519,8 +518,8 @@ class EditorSelection {
   }
 
   deleteFromDocument() {
-    const newPosition = this.range.deleteContents()
-    this.collapse(newPosition.node, newPosition.offset)
+    this.range.deleteContents()
+    this.collapseToStart()
   }
 }
 
@@ -558,15 +557,6 @@ const findAncestorAtomic = (node: Node, root: Node): Element | null => {
   let current: Node | null = node
   while (current && current !== root) {
     if (isAtomicComponent(current)) return current as Element
-    current = current.parentNode
-  }
-  return null
-}
-
-const findAncestorBlock = (node: Node, root: Node): Element | null => {
-  let current: Node | null = node
-  while (current && current !== root) {
-    if (isBlockElement(current)) return current as Element
     current = current.parentNode
   }
   return null
@@ -809,59 +799,10 @@ export const keyBindings: Record<string, KeyBindingCommand> = {
     selection.modify('extend', 'backward', 'character')
   },
   'Backspace': (selection) => {
-    // if (!selection.isCollapsed) {
-    //   selection.deleteFromDocument()
-    //   return
-    // }
-
-    // const { focus } = selection
-    // if (!focus) return
-
-    // // Find the block containing the focus
-    // let currentBlock: Node | null = focus.node
-    // if (currentBlock === selection.editor.document) return // empty editor
-    // while (currentBlock && currentBlock.parentNode !== selection.editor.document) {
-    //   currentBlock = currentBlock.parentNode
-    // }
-    // if (!currentBlock) {
-    //   // Should not happen, but as a fallback
-    //   selection.modify('extend', 'backward', 'character')
-    //   selection.deleteFromDocument()
-    //   return
-    // }
-
-    // // Check if cursor is at the beginning of the block
-    // const range = document.createRange()
-    // range.selectNodeContents(currentBlock)
-    // range.setEnd(focus.node, focus.offset)
-
-    // // If there's no visible content before the cursor in this block, we're at the start.
-    // if (range.toString().trim() === '') {
-    //   const prevBlock = (currentBlock as Element).previousElementSibling
-    //   if (prevBlock) {
-    //     // We are at the start of a block, and there is a previous block. Merge them.
-
-    //     // Find a suitable position for the cursor after merge.
-    //     // It should be at the end of the previous block.
-    //     const walker = selection.editor.createTreeWalker()
-    //     walker.currentNode = prevBlock
-    //     const nodesInPrevBlock = Array.from(walker.forward())
-    //     const lastNode = nodesInPrevBlock.length > 0 ? nodesInPrevBlock[nodesInPrevBlock.length - 1] : prevBlock
-
-    //     const newCursorNode = lastNode
-    //     const newCursorOffset = getAfterOffset(lastNode)
-
-    //     // Move all children from current block to the end of the previous block.
-    //     while (currentBlock.firstChild) {
-    //       prevBlock.appendChild(currentBlock.firstChild)
-    //     }
-    //     ;(currentBlock as Element).remove()
-
-    //     // Set selection to the new position.
-    //     selection.collapse(newCursorNode, newCursorOffset)
-    //     return
-    //   }
-    // }
+    if (!selection.isCollapsed) {
+      selection.deleteFromDocument()
+      return
+    }
 
     // Default behavior: delete a single character backward.
     selection.modify('extend', 'backward', 'character')
@@ -923,11 +864,30 @@ export function main() {
     const caretPosition = editor.getPositionFromPoint(clientX, clientY)
     if (!caretPosition) return
 
-    const range = editor.createRange()
     const selection = editor.getSelection()
-    range.setStart(caretPosition.node, caretPosition.offset)
-    selection.setRange(range)
+    if (e.shiftKey) {
+      selection.extend(caretPosition.node, caretPosition.offset)
+    } else {
+      selection.collapse(caretPosition.node, caretPosition.offset)
+    }
     view.render()
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const { clientX: moveX, clientY: moveY } = moveEvent
+      const movePosition = editor.getPositionFromPoint(moveX, moveY)
+      if (!movePosition) return
+
+      selection.extend(movePosition.node, movePosition.offset)
+      view.render()
+    }
+
+    const onMouseUp = () => {
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
   }
 
   // test

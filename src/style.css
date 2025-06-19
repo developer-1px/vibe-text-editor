@@ -39,6 +39,7 @@ h1 {
   max-width: 600px;
   margin: 0 auto;
   padding: 2rem;
+  white-space: pre-wrap;
 }
 
 .mention {
