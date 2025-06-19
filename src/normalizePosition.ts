@@ -26,6 +26,58 @@ const findNextNode = (editor: Editor, node: Node, direction: 'forward' | 'backwa
   return createTraverser(editor, node, direction).first()
 }
 
+/** 텍스트 노드 경계에서의 위치 처리 */
+const handleTextNodeBoundary = (editor: Editor, node: Node, offset: number, maxOffset: number): Position | null => {
+  if (!isTextNode(node) || offset !== maxOffset) {
+    return null // 텍스트 노드의 끝이 아니면 특별한 처리 없음
+  }
+
+  const nextNode = findNextNode(editor, node, 'forward')
+  if (!nextNode) {
+    return null // 다음 노드가 없으면 특별한 처리 없음
+  }
+
+  // 다음 노드가 인라인 atomic 컴포넌트인 경우
+  if (isAtomicComponent(nextNode) && !isBlockElement(nextNode)) {
+    return editor.createPosition(nextNode, 0)
+  }
+
+  // 다음 노드가 텍스트 노드인 경우
+  if (isTextNode(nextNode)) {
+    const isCurrentNodeInInline = isTextNodeInInlineElement(node)
+    const isNextNodeInInline = isTextNodeInInlineElement(nextNode)
+
+    // 일반 텍스트에서 인라인 텍스트로 넘어가는 경우 (예: text -> <strong>text</strong>)
+    if (!isCurrentNodeInInline && isNextNodeInInline) {
+      return editor.createPosition(nextNode, 0)
+    }
+
+    // 인라인 텍스트에서 다른 인라인 텍스트로 넘어가는 경우 (예: <strong>text1</strong><em>text2</em>)
+    if (isCurrentNodeInInline && isNextNodeInInline) {
+      return editor.createPosition(node, maxOffset) // 현재 노드의 끝에 머무름
+    }
+  }
+
+  return null // 위 조건들에 해당하지 않으면 특별한 처리 없음
+}
+
+/** 블록 요소 간 이동인지 확인 */
+const isMovingBetweenBlocks = (currentNode: Node, nextNode: Node): boolean => {
+  return !isTextNodeInInlineElement(currentNode) && !isTextNodeInInlineElement(nextNode) && currentNode.parentNode !== nextNode.parentNode
+}
+
+/** 새 오프셋 계산 */
+const calculateNewOffset = (currentOffset: number, maxOffset: number, currentNode: Node, nextNode: Node, isForward: boolean): number => {
+  const isBlockToBlock = isMovingBetweenBlocks(currentNode, nextNode)
+  const blockBoundaryAdjustment = isBlockToBlock ? 1 : 0
+
+  // 앞으로 이동 시: 현재 offset에서 현재 노드의 maxOffset과 블록 경계 조정을 뺀다.
+  // 뒤로 이동 시: 현재 offset에 다음 노드의 offset과 블록 경계 조정을 더한다.
+  return isForward
+    ? currentOffset - maxOffset - blockBoundaryAdjustment
+    : currentOffset + getAfterOffset(nextNode) + blockBoundaryAdjustment
+}
+
 export function normalizePosition(editor: Editor, node: Node, offset: number): Position {
   if (!node) {
     return editor.createPosition(editor.document.firstChild!, 0)
@@ -38,32 +90,10 @@ export function normalizePosition(editor: Editor, node: Node, offset: number): P
     const maxOffset = getAfterOffset(currentNode)
 
     if (currentOffset >= 0 && currentOffset <= maxOffset) {
-      // 텍스트 노드의 끝 경계에서 인접 노드와의 관계 확인
-      if (isTextNode(currentNode) && currentOffset === maxOffset) {
-        const nextNode = findNextNode(editor, currentNode, 'forward')
-
-        if (nextNode) {
-          // text -> atomic-inline 경계 처리
-          if (isAtomicComponent(nextNode) && !isBlockElement(nextNode)) {
-            return editor.createPosition(nextNode, 0)
-          }
-
-          if (isTextNode(nextNode)) {
-            const isCurrentInline = isTextNodeInInlineElement(currentNode)
-            const isNextInline = isTextNodeInInlineElement(nextNode)
-
-            // text -> inline: 다음 노드의 시작으로 자동 이동
-            if (!isCurrentInline && isNextInline) {
-              return editor.createPosition(nextNode, 0)
-            }
-            // mark -> mark: 현재 노드의 끝에 머무름 (자동 이동 방지)
-            if (isCurrentInline && isNextInline) {
-              return editor.createPosition(currentNode, maxOffset)
-            }
-          }
-        }
+      const boundaryPosition = handleTextNodeBoundary(editor, currentNode, currentOffset, maxOffset)
+      if (boundaryPosition) {
+        return boundaryPosition
       }
-      // 유효한 위치이므로 반환
       return editor.createPosition(currentNode, currentOffset)
     }
 
@@ -72,24 +102,10 @@ export function normalizePosition(editor: Editor, node: Node, offset: number): P
     const nextNode = findNextNode(editor, currentNode, direction)
 
     if (!nextNode) {
-      // 문서의 시작 또는 끝에 도달하면 경계에 머무름
       return editor.createPosition(currentNode, isForward ? maxOffset : 0)
     }
 
-    const isBlockToBlock =
-      !isTextNodeInInlineElement(currentNode) && !isTextNodeInInlineElement(nextNode) && currentNode.parentNode !== nextNode.parentNode
-
-    if (isForward) {
-      currentOffset -= maxOffset
-      if (isBlockToBlock) {
-        currentOffset -= 1
-      }
-    } else {
-      currentOffset += getAfterOffset(nextNode)
-      if (isBlockToBlock) {
-        currentOffset += 1
-      }
-    }
+    currentOffset = calculateNewOffset(currentOffset, maxOffset, currentNode, nextNode, isForward)
     currentNode = nextNode
   }
 }
