@@ -116,8 +116,26 @@ function normalizePosition(editor: Editor, node: Node, offset: number): Position
   }
 
   const isForward = offset > maxOffset
-  const traverser = isForward ? traversePreOrderGenerator : traversePreOrderBackwardGenerator
+  
+  // 텍스트 노드에서 경계를 벗어난 경우, 다른 노드가 있는지 먼저 확인
+  if (isTextNode(node)) {
+    const traverser = isForward ? traversePreOrderGenerator : traversePreOrderBackwardGenerator
+    const hasNextNode = iter(traverser(editor.document, node, (node) => {
+      if (isAtomicComponent(node)) {
+        return false
+      }
+    }))
+      .filter((n) => isTextNode(n) || isAtomicComponent(n))
+      .filter((n) => n !== node) // 현재 노드 제외
+      .first()
+    
+    if (!hasNextNode) {
+      // 다른 노드가 없으면 경계에서 멈춤
+      return editor.createPosition(node, isForward ? maxOffset : 0)
+    }
+  }
 
+  const traverser = isForward ? traversePreOrderGenerator : traversePreOrderBackwardGenerator
   let remains = isForward ? offset : Math.abs(offset)
 
   const targetNode = iter(
@@ -135,8 +153,11 @@ function normalizePosition(editor: Editor, node: Node, offset: number): Position
     .last()
 
   if (!targetNode) {
-    const errorMsg = isForward ? 'No node found in forward normalization' : 'No node found in backward normalization'
-    throw new Error(errorMsg)
+    // 경계에서 더 이상 이동할 수 없으면 현재 위치에 머무름
+    if (isTextNode(node)) {
+      return editor.createPosition(node, isForward ? maxOffset : 0)
+    }
+    return editor.createPosition(node, maxOffset)
   }
 
   const finalOffset = isForward ? getAfterOffset(targetNode) + remains : Math.abs(remains)
@@ -585,10 +606,29 @@ export const isAtomicComponent = (node: Node) => {
   return false
 }
 
+export const isBlockElement = (node: Node): boolean => {
+  if (isElementNode(node)) {
+    const computedStyle = window.getComputedStyle(node)
+    const display = computedStyle.display
+    // display 값에 inline이 포함되지 않으면 블록 요소로 간주
+    return !display.includes('inline')
+  }
+  return false
+}
+
 const findAncestorAtomic = (node: Node, root: Node): Element | null => {
   let current: Node | null = node
   while (current && current !== root) {
     if (isAtomicComponent(current)) return current as Element
+    current = current.parentNode
+  }
+  return null
+}
+
+const findAncestorBlock = (node: Node, root: Node): Element | null => {
+  let current: Node | null = node
+  while (current && current !== root) {
+    if (isBlockElement(current)) return current as Element
     current = current.parentNode
   }
   return null
